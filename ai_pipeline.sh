@@ -38,23 +38,31 @@ fi
 # 기본값 폴백 설정
 STEP1_ENABLED="${STEP1_ENABLED:-true}"
 STEP1_AGENT="${STEP1_AGENT:-agy}"
-STEP1_MODEL="${STEP1_MODEL:-}"
+STEP1_MODEL="${STEP1_MODEL-}"
 
 STEP2_ENABLED="${STEP2_ENABLED:-true}"
 STEP2_AGENT="${STEP2_AGENT:-codex}"
-STEP2_MODEL="${STEP2_MODEL:-gpt-5.6-sol}"
+if [ "$STEP2_AGENT" = "codex" ]; then
+  STEP2_MODEL="${STEP2_MODEL-gpt-5.6-sol}"
+else
+  STEP2_MODEL="${STEP2_MODEL-}"
+fi
 
 STEP3_ENABLED="${STEP3_ENABLED:-true}"
 STEP3_AGENT="${STEP3_AGENT:-claude}"
-STEP3_MODEL="${STEP3_MODEL:-}"
+STEP3_MODEL="${STEP3_MODEL-}"
 
 STEP4_ENABLED="${STEP4_ENABLED:-true}"
 STEP4_AGENT="${STEP4_AGENT:-codex}"
-STEP4_MODEL="${STEP4_MODEL:-gpt-5.6-sol}"
+if [ "$STEP4_AGENT" = "codex" ]; then
+  STEP4_MODEL="${STEP4_MODEL-gpt-5.6-sol}"
+else
+  STEP4_MODEL="${STEP4_MODEL-}"
+fi
 
 STEP5_ENABLED="${STEP5_ENABLED:-true}"
 STEP5_AGENT="${STEP5_AGENT:-agy}"
-STEP5_MODEL="${STEP5_MODEL:-}"
+STEP5_MODEL="${STEP5_MODEL-}"
 
 # ------------------------------------------------------------------------------
 # 에이전트 실행 공통 디스패처 함수
@@ -76,36 +84,42 @@ execute_step_agent() {
 
   echo -e "${C_YELLOW}▶ 실행 에이전트: ${C_BOLD}$agent_display${C_RESET} ${model:+(모델: $model)}"
 
+  local err_file=""
+  if [ -n "$out_file" ]; then
+    err_file="$PIPELINE_DIR/$(basename "$out_file").err"
+  fi
+
+  local rc=0
   case "$agent" in
     agy)
       local cmd=("agy" "-p" "$prompt" "--dangerously-skip-permissions")
       [ -n "$model" ] && cmd+=("--model" "$model")
       [ -n "$agy_mode" ] && cmd+=("--mode" "$agy_mode")
       if [ -n "$out_file" ]; then
-        "${cmd[@]}" > "$out_file"
+        "${cmd[@]}" > "$out_file" 2>"$err_file" || rc=$?
       else
-        "${cmd[@]}"
+        "${cmd[@]}" || rc=$?
       fi
       ;;
     codex)
-      local cmd=("codex" "exec" "--skip-git-repo-check" "-a" "never")
+      local cmd=("codex" "exec" "--skip-git-repo-check" "-c" "approval_policy=never")
       [ -n "$model" ] && cmd+=("-m" "$model")
       cmd+=("$prompt")
       if [ -n "$out_file" ]; then
-        "${cmd[@]}" -o "$out_file" </dev/null >/dev/null 2>&1 || {
-          "${cmd[@]}" </dev/null > "$out_file" 2>&1
+        "${cmd[@]}" -o "$out_file" </dev/null >/dev/null 2>"$err_file" || {
+          "${cmd[@]}" </dev/null > "$out_file" 2>>"$err_file" || rc=$?
         }
       else
-        "${cmd[@]}" </dev/null
+        "${cmd[@]}" </dev/null || rc=$?
       fi
       ;;
     claude)
       local cmd=("claude" "-p" "$prompt" "--permission-mode" "auto")
       [ -n "$model" ] && cmd+=("--model" "$model")
       if [ -n "$out_file" ]; then
-        "${cmd[@]}" </dev/null > "$out_file" 2>&1 || true
+        "${cmd[@]}" </dev/null > "$out_file" 2>"$err_file" || rc=$?
       else
-        "${cmd[@]}" </dev/null || true
+        "${cmd[@]}" </dev/null || rc=$?
       fi
       ;;
     *)
@@ -113,6 +127,17 @@ execute_step_agent() {
       exit 1
       ;;
   esac
+
+  if [ -n "$out_file" ]; then
+    if [ "$rc" -ne 0 ] || [ ! -s "$out_file" ]; then
+      echo "오류: 에이전트 '$agent' 실행 실패 (종료코드: $rc). 산출물이 비어있거나 생성되지 않았습니다: $out_file" >&2
+      echo "      stderr 로그: $err_file" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  return "$rc"
 }
 
 log_step() {
@@ -166,7 +191,10 @@ $GOV_CONTEXT
 3. Non-Goal 범위를 침범하지 않도록 주의하고, 기존 정책과 충돌하지 않도록 설계
 결과는 순수 마크다운으로 작성해주세요."
 
-  execute_step_agent "$STEP1_AGENT" "$STEP1_MODEL" "$PROMPT_STEP1" "$PLAN_FILE" "plan"
+  if ! execute_step_agent "$STEP1_AGENT" "$STEP1_MODEL" "$PROMPT_STEP1" "$PLAN_FILE" "plan"; then
+    echo -e "${C_YELLOW}✗ 1단계 실패: 에이전트 '$STEP1_AGENT'. 로그 확인: $PIPELINE_DIR/$(basename "$PLAN_FILE").err${C_RESET}" >&2
+    exit 1
+  fi
   echo -e "${C_GREEN}✓ 1단계 완료! 계획서 저장됨: $PLAN_FILE${C_RESET}"
 else
   log_step "1/5" "1단계 스킵됨 (설정에 의해 비활성화)"
@@ -195,7 +223,10 @@ $(cat "$PLAN_FILE")
 3. 불필요하게 범위를 넓힌 부분(Non-Goal 위반 여부)
 4. 구현자가 반드시 주의해야 할 핵심 체크리스트 3가지"
 
-  execute_step_agent "$STEP2_AGENT" "$STEP2_MODEL" "$PROMPT_STEP2" "$PLAN_REVIEW_FILE" ""
+  if ! execute_step_agent "$STEP2_AGENT" "$STEP2_MODEL" "$PROMPT_STEP2" "$PLAN_REVIEW_FILE" ""; then
+    echo -e "${C_YELLOW}✗ 2단계 실패: 에이전트 '$STEP2_AGENT'. 로그 확인: $PIPELINE_DIR/$(basename "$PLAN_REVIEW_FILE").err${C_RESET}" >&2
+    exit 1
+  fi
   echo -e "${C_GREEN}✓ 2단계 완료! 기획 리뷰 저장됨: $PLAN_REVIEW_FILE${C_RESET}"
 else
   log_step "2/5" "2단계 스킵됨 (설정에 의해 비활성화)"
@@ -225,7 +256,10 @@ $(cat "$PLAN_REVIEW_FILE")
 - 만약 작업 도중 비가역적 파괴(FORBIDDEN)나 제품 방향 변경(HUMAN_REQUIRED)이 필요할 경우, 임의로 확정하지 말고 .governance/HUMAN_REVIEW_QUEUE.md에 등록한 뒤 독립적인 작업부터 진행하세요.
 - 프로젝트 내 빌드 또는 테스트 명령어가 있다면 실행하여 정상 통과를 확인하세요."
 
-  execute_step_agent "$STEP3_AGENT" "$STEP3_MODEL" "$PROMPT_STEP3" "" ""
+  if ! execute_step_agent "$STEP3_AGENT" "$STEP3_MODEL" "$PROMPT_STEP3" "" ""; then
+    echo -e "${C_YELLOW}✗ 3단계 실패: 에이전트 '$STEP3_AGENT' 실행이 비정상 종료되었습니다. 위 콘솔 출력을 확인하세요.${C_RESET}" >&2
+    exit 1
+  fi
   echo -e "${C_GREEN}✓ 3단계 완료! 코드 작성이 완료되었습니다.${C_RESET}"
 else
   log_step "3/5" "3단계 스킵됨 (설정에 의해 비활성화)"
@@ -263,7 +297,10 @@ $DIFF_CONTENT
 3. 코드 스타일, 중복 제거 등 리팩토링 포인트
 4. 보완해야 할 테스트 케이스"
 
-  execute_step_agent "$STEP4_AGENT" "$STEP4_MODEL" "$PROMPT_STEP4" "$CODE_REVIEW_FILE" ""
+  if ! execute_step_agent "$STEP4_AGENT" "$STEP4_MODEL" "$PROMPT_STEP4" "$CODE_REVIEW_FILE" ""; then
+    echo -e "${C_YELLOW}✗ 4단계 실패: 에이전트 '$STEP4_AGENT'. 로그 확인: $PIPELINE_DIR/$(basename "$CODE_REVIEW_FILE").err${C_RESET}" >&2
+    exit 1
+  fi
   echo -e "${C_GREEN}✓ 4단계 완료! 코드 리뷰 저장됨: $CODE_REVIEW_FILE${C_RESET}"
 else
   log_step "4/5" "4단계 스킵됨 (설정에 의해 비활성화)"
@@ -291,7 +328,10 @@ $(cat "$CODE_REVIEW_FILE")
 3. .governance/PROJECT_STATE.md 파일이 존재한다면, 이번 사이클의 실행 결과와 Evidence를 반영하여 업데이트하세요.
 4. 작업 완료 후 최종 요약 보고서를 출력하세요."
 
-  execute_step_agent "$STEP5_AGENT" "$STEP5_MODEL" "$PROMPT_STEP5" "" "accept-edits"
+  if ! execute_step_agent "$STEP5_AGENT" "$STEP5_MODEL" "$PROMPT_STEP5" "" "accept-edits"; then
+    echo -e "${C_YELLOW}✗ 5단계 실패: 에이전트 '$STEP5_AGENT' 실행이 비정상 종료되었습니다. 위 콘솔 출력을 확인하세요.${C_RESET}" >&2
+    exit 1
+  fi
   echo -e "${C_GREEN}✓ 5단계 완료! 전체 파이프라인이 성공적으로 종료되었습니다.${C_RESET}"
 else
   log_step "5/5" "5단계 스킵됨 (설정에 의해 비활성화)"

@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Forward one Claude Code hook invocation to the runner's FIFO.
+
+Claude Code runs this as `amask-hook <fifo> <EventName>` with the hook
+payload on stdin. It must never fail loudly, block, or write to stderr: a
+problem in the screensaver must not disturb the agent (P-101).
+"""
+
+import json
+import os
+import sys
+
+# Fields worth forwarding. The prompt is included because the panel shows what
+# was asked, and the hook reports it exactly -- no reconstructing it from
+# keystrokes. It stays in memory in the runner and is never written to disk.
+KEEP = ("session_id", "tool_name", "message", "prompt", "stop_hook_active")
+
+
+def main():
+    if len(sys.argv) < 3:
+        return 0
+    fifo, event = sys.argv[1], sys.argv[2]
+    token = sys.argv[3] if len(sys.argv) > 3 else ""
+
+    payload = {}
+    try:
+        raw = sys.stdin.read()
+        if raw.strip():
+            payload = json.loads(raw)
+    except Exception:
+        payload = {}
+
+    record = {"event": event, "token": token}
+    if isinstance(payload, dict):
+        for key in KEEP:
+            if key in payload:
+                record[key] = payload[key]
+
+    try:
+        fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        try:
+            os.write(fd, (json.dumps(record) + "\n").encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        pass  # the runner may be gone; that is not the agent's problem
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,6 @@
+# Pipeline run artifacts: regenerated on every run, and a failed run leaves
+# error text in them.
+.ai_pipeline/
+
+__pycache__/
+*.pyc
