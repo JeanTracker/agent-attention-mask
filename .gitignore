@@ -2,5 +2,8 @@
 # error text in them.
 .ai_pipeline/
 
+# Claude Code 상태 채널과 iTerm2 화면 버퍼 조사 노트. 저장소 밖에서 관리한다.
+docs/
+
 __pycache__/
 *.pyc

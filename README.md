@@ -200,6 +200,14 @@ records its output timing; it produced the evidence behind the observation table
 python3 tests/tap_agent.py claude
 ```
 
+`tests/probe_hooks.py` is an instrument too. It wires up every hook event that is documented
+and catches what actually fires and what payload arrives. This is where the evidence behind
+hook-related judgements comes from.
+
+```sh
+python3 tests/probe_hooks.py --interrupt 12 "Write 800 words about rain"
+```
+
 ## Modules
 
 **`cli.py`** — the overlay ↔ passthrough state machine. Every judgement above converges here.
@@ -220,5 +228,9 @@ restoration on every exit path.
 **`hooks.py`** — FIFO creation and Claude Code hook wiring. Cleaning up FIFOs left behind by
 dead runners happens here too.
 
+The procedure for changing the code is in `CONTRIBUTING.md`.
+
 The reasoning behind design judgements is recorded in `.governance/DECISIONS.md` and
-`.governance/ASSUMPTIONS_AND_HYPOTHESES.md`. There is no licence file yet.
+`.governance/ASSUMPTIONS_AND_HYPOTHESES.md`, and measurements in
+`.governance/PROJECT_STATE.md` with their dates.
+There is no licence file yet.
