@@ -352,6 +352,69 @@ def test_emitter_forwards_prompt_id():
     check("emitter가 agent_id를 전달", got.get("agent_id") == "ag1", str(events))
 
 
+# -- Stop means the user can type, so the screen stays theirs (D-035) --------
+
+
+def test_stop_with_background_tasks_never_re_covers():
+    """`Stop` while a background subagent runs is still WAITING, forever.
+
+    Measured: the main thread's `Stop` arrives with `background_tasks` still
+    listing a running subagent, and from that moment a typed prompt executes
+    immediately -- so covering the screen would hide an input box that works.
+    OVERLAY_DELAY is squeezed to 1.5s here and the sequence runs 14s, which is
+    room for eight covers if the state ever flipped back.
+    """
+    running = [{"id": "ad6f92b64daf7bd60", "type": "subagent",
+                "status": "running", "description": "Sleep 45 then report",
+                "agent_type": "general-purpose"}]
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "서브에이전트 띄워줘"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Agent"}],
+        [2.0, "PostToolUse", {"prompt_id": "p1", "tool_name": "Agent"}],
+        [2.2, "Stop", {"prompt_id": "p1", "background_tasks": running}],
+        # The subagent keeps working, and keeps saying so.
+        [4.0, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash",
+                             "agent_id": "ad6f92b64daf7bd60",
+                             "agent_type": "general-purpose"}],
+        [8.0, "PostToolUse", {"prompt_id": "p1", "tool_name": "Bash",
+                              "agent_id": "ad6f92b64daf7bd60",
+                              "agent_type": "general-purpose"}],
+        [9.0, "SubagentStop", {"prompt_id": "p1", "agent_type": "general-purpose",
+                               "agent_id": "ad6f92b64daf7bd60",
+                               "background_tasks": running}],
+    ], total=14, timeout=22, AMASK_OVERLAY_DELAY="1.5")
+    check("Stop 시점에 덮여 있었다 (전제)",
+          any(is_rain(chunk) for t, chunk in res.timeline if t < 2.2),
+          "작업 중에도 덮이지 않아 이 케이스가 무의미하다")
+    after = [t for t, chunk in res.timeline if is_rain(chunk) and t > 3.0]
+    check("백그라운드가 도는 중에도 Stop 이후로는 덮지 않는다",
+          not after, f"재진입 t={after[0] if after else None}")
+
+
+def test_the_injected_notification_turn_still_covers():
+    """The one thing that may cover after a `Stop`: a new turn.
+
+    A finished background task comes back as an injected `UserPromptSubmit`
+    (D-031) and real work follows it, so that turn is genuinely busy. This is
+    the case the rule above must not swallow -- without it, "never cover after
+    Stop" would mean never covering again for the rest of the session.
+    """
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "서브에이전트 띄워줘"}],
+        [2.0, "Stop", {"prompt_id": "p1", "background_tasks": [
+            {"id": "bxge9kxgq", "type": "shell", "status": "running"}]}],
+        [4.0, "UserPromptSubmit", {"prompt_id": "p2",
+                                   "prompt": "<task-notification>\n<task-id>bxge9kxgq</task-id>"}],
+        [4.4, "PreToolUse", {"prompt_id": "p2", "tool_name": "Bash"}],
+    ], total=14, timeout=22, AMASK_OVERLAY_DELAY="1.5")
+    quiet = [t for t, chunk in res.timeline if is_rain(chunk) and 2.5 < t < 4.0]
+    check("주입 전의 유휴 구간은 덮이지 않는다",
+          not quiet, f"재진입 t={quiet[0] if quiet else None}")
+    later = [t for t, chunk in res.timeline if is_rain(chunk) and t > 5.0]
+    check("주입된 알림이 연 턴은 작업으로 인정된다", later,
+          "새 턴이 시작됐는데도 덮이지 않음")
+
+
 if __name__ == "__main__":
     for fn in list(globals().values()):
         if callable(fn) and getattr(fn, "__name__", "").startswith("test_"):
