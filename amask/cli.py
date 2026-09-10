@@ -86,6 +86,17 @@ IDLE_SILENCE = _seconds("AMASK_IDLE_SILENCE", 1.5)
 # session is enough to cause.
 HOOK_STALL = _seconds("AMASK_HOOK_STALL", 120.0)
 
+# `UserPromptSubmit` does not only fire for things the user typed. The harness
+# injects its own messages as prompts -- a finished background task, a system
+# reminder -- and they arrive with the notification markup as the prompt text,
+# which the panel then displayed instead of the question (D-031). Measured
+# payloads: a background task lands as "<task-notification>\n<task-id>...".
+INJECTED_PROMPT_PREFIXES = (
+    "<task-notification>",
+    "<system-reminder>",
+    "<local-command-",
+)
+
 # How long the agent must be *continuously* busy before the screen is covered.
 # Continuously is the operative word: an idle interactive claude still repaints
 # briefly every 8-10 seconds (measured: 149 and 59 byte blips), and treating
@@ -396,15 +407,41 @@ class Runner:
                 # be independent, so anything else writing here is ignored.
                 _debug(f"hook rejected: {event.get('event')}")
                 continue
-            meaning = hooks.EVENT_MEANING.get(event.get("event"))
+            name = event.get("event")
+            meaning = hooks.EVENT_MEANING.get(name)
             if meaning is None:
                 continue
+            prompt_id = event.get("prompt_id")
+
+            # `agent_id` is only present on events fired inside a subagent
+            # -- Claude Code documents it as the marker for exactly that -- so
+            # an event carrying one is not the main thread's state. Claude Code runs an unnamed internal
+            # subagent after a turn ends -- to build the next-prompt
+            # suggestion -- and its SubagentStop lands ~2s after Stop. Reading
+            # that as work put the panel back up saying "working" on an idle
+            # agent (D-033).
+            if meaning == hooks.BUSY and event.get("agent_id"):
+                _debug(f"hook {name} ignored: subagent {event.get('agent_id')}")
+                continue
+
             prompt = event.get("prompt")
             if prompt:
                 # Straight from the agent, so no reconstructing it from
-                # keystrokes -- and no way for it to come out garbled.
-                self.hud.prompt = " ".join(str(prompt).split())[:200]
-            _debug(f"hook {event.get('event')} -> {meaning}")
+                # keystrokes -- and no way for it to come out garbled. But only
+                # when the user is the one who said it: injected prompts carry
+                # notification markup, and showing that is worse than showing
+                # the question it interrupted, so the panel keeps the old one
+                # (D-031). The state still changes -- real work does follow an
+                # injected prompt.
+                if _is_injected_prompt(prompt):
+                    _debug(f"hook {name}: injected prompt kept off the panel")
+                else:
+                    self.hud.prompt = " ".join(str(prompt).split())[:200]
+
+            # The turn id is in the line because the state machine has three
+            # inputs and a wrong call looks the same from outside whichever
+            # one made it; this is what tells them apart after the fact.
+            _debug(f"hook {name} -> {meaning} prompt_id={prompt_id}")
             self._hook_state = meaning
             self._hook_at = time.monotonic()
             if meaning == hooks.BUSY:
@@ -743,6 +780,11 @@ def _model_rank(name):
 
 
 _DEBUG = os.environ.get("AMASK_DEBUG")
+
+
+def _is_injected_prompt(prompt):
+    """True for a `UserPromptSubmit` the harness raised, not the user (D-031)."""
+    return str(prompt).lstrip().startswith(INJECTED_PROMPT_PREFIXES)
 
 
 def _debug(message):

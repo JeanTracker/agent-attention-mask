@@ -148,3 +148,32 @@
   * 함께 넣은 보강: 모든 훅 이벤트에 **세션 토큰**을 찍고 수신 시 검증한다. FIFO는 파일시스템의 이름일 뿐이라, 경로를 알아낸 다른 프로세스가 우리 상태를 움직이지 못하게 하는 것은 결국 이 토큰이다. 자식에게는 경로와 토큰을 함께 넘긴다(`AMASK_HOOK_FIFO` / `AMASK_HOOK_TOKEN`).
   * 함께 넣은 정리: 기동 시 **죽은 프로세스의 FIFO를 청소**한다. SIGKILL로 죽은 러너는 자기 것을 지우지 못해 쌓인다(실제로 수십 개 발견).
   * 검증: 러너 두 개를 동시에 띄워 A(3초 작업 후 대기)와 B(8초 뒤 시작, 6초 작업)를 돌린 결과 A는 1.2~2.7초만 덮였고 B가 일하는 동안 다시 덮이지 않았다.
+
+* **D-031**: 주입된 `UserPromptSubmit`의 프롬프트는 패널에 쓰지 않는다 (결정일: 2026-09-09)
+  * 사용자 보고: 서브에이전트/백그라운드 작업이 도는 중 패널의 프롬프트 줄이 질문이 아니라 `> <task-notification> <task-id>bxvirjocd</task-id> <tool-use-id>toolu_...`로 나온다. 같은 시점 iTerm2의 AI 세션 status는 실제 프롬프트를 계속 보여준다.
+  * 조사: `tests/probe_hooks.py`로 실제 훅 페이로드를 관측했다. `UserPromptSubmit`은 사용자가 입력한 것에만 발화하지 않는다 — 하네스가 자기 메시지를 프롬프트로 주입하고, 그 알림 마크업이 그대로 `prompt` 필드에 담긴다. 실측 두 건: `19.29 UserPromptSubmit prompt="<task-notification>\n<task-id>a4fa65...`, `52.57 ... <task-id>buyhffjwc...`. 러너는 비어 있지 않은 `prompt`를 무조건 `hud.prompt`에 덮어써서 이것이 화면에 나왔다.
+  * 결정: 프롬프트가 하네스 주입 마크업으로 시작하면 **패널에 쓰지 않고 이전 프롬프트를 유지**한다. 접두사 목록은 관측된 `<task-notification>`에 `<system-reminder>`, `<local-command-`를 더한 명시적 집합으로 두었다.
+  * **상태 판정은 바꾸지 않는다.** 주입된 프롬프트 뒤에는 실제 작업이 따라온다(실측: 19.29 주입 → 30.26 `Stop`). 그러니 BUSY 전이는 그대로 두고 표시만 막는다.
+  * 이탈 위험: "`<`로 시작하는 모든 프롬프트"로 일반화하지 않았다. HTML을 붙여넣은 질문은 진짜 질문이다. 대신 새 주입 종류가 생기면 접두사를 추가해야 한다.
+  * 검증: `test_phase9_hooks.py`에 3개 항목 추가(마크업 미표시, 직전 질문 유지, `<div>` 포함 평범한 질문은 통과). 수정 전에는 첫 항목이 실패한다.
+
+* **D-032**: 이미 `Stop`을 본 턴의 BUSY 이벤트는 무시한다 (결정일: 2026-09-09)
+  * 사용자 보고: 서브에이전트 수행이 끝난 뒤 패널이 `working...`으로 남는다. 같은 시점 iTerm2 AI 세션 status는 `idle`.
+  * 조사: 원인은 `SubagentStop`의 **도착 순서**다. 실측 트레이스에서 진짜 서브에이전트의 `SubagentStop`(16.72, `agent_type: "general-purpose"`)은 그 턴의 `Stop`(18.91) **앞**에 온다. 그런데 턴이 끝난 뒤 `agent_type: ""`인 `SubagentStop`이 2~2.6초 늦게 하나 더 온다 — `Stop(883a) 30.26 → SubagentStop(883a) 32.38`, `Stop(7506) 55.84 → SubagentStop(7506) 58.43`. 후자가 트레이스의 마지막 이벤트였다.
+  * `EVENT_MEANING["SubagentStop"] = BUSY`라서 러너는 `Stop`으로 깨어난 직후 다시 BUSY로 뒤집히고, 뒤따르는 이벤트가 없어 `HOOK_STALL`(120초)까지 `working`에 갇힌다. 사용자 스크린샷의 `1m 6s`가 그 구간이다.
+  * 결정: `Stop`(및 `SessionEnd`)에서 그 턴의 `prompt_id`를 기억하고, **같은 `prompt_id`로 오는 BUSY 이벤트는 낙오자로 보고 버린다.** `bin/amask-hook`의 `KEEP`에 `prompt_id`를 추가했다(없으면 러너에 도달하지 않는다).
+  * `EVENT_MEANING`에서 `SubagentStop`을 빼지 않은 이유: 턴이 살아 있는 동안 오는 진짜 `SubagentStop`은 여전히 작업이다. 이벤트 이름이 아니라 **턴 경계**로 거르는 편이 앞으로 생길 다른 낙오자에도 그대로 적용된다.
+  * `Notification`은 턴을 닫지 않는다. 권한 대기는 턴 중간이므로, 이것으로 턴을 닫으면 사용자 승인 뒤 같은 `prompt_id`로 오는 `PreToolUse`가 낙오자로 걸려 남은 턴 내내 화면이 덮이지 않는다.
+  * D-030으로부터의 이탈은 아니다. `HOOK_STALL`과 타이밍 상수는 건드리지 않았다 — 상태 채널은 옳았고 러너가 이벤트 하나를 오독한 것이다.
+  * 검증: `test_phase9_hooks.py`에 4개 항목 추가(낙오자 무시, 다음 턴 정상 재진입, `Notification` 후 같은 턴 작업 인정, emitter의 `prompt_id` 전달) + 신규 픽스처 `hooked_seq.py`(훅 시퀀스를 JSON으로 재생). 수정 전에는 낙오자·emitter 항목이 실패하고 재진입이 `t=6.62`에 관측된다.
+
+* **D-033**: 서브에이전트 판별을 `prompt_id` 대조에서 **`agent_id` 유무**로 교체 — D-032로부터의 이탈 (결정일: 2026-09-09)
+  * D-032는 `Stop`에서 그 턴의 `prompt_id`를 기억하고 같은 id의 BUSY 이벤트를 낙오자로 버리도록 구현했다. 사용자 요청으로 조사 노트와 교차 확인하다가 **이미 더 나은 규칙이 정리돼 있었다는 것을 발견**했다.
+  * 앞선 실측이 같은 현상을 이미 잡아 두었다(`Stop` 뒤 2.1~2.6초, `agent_type: ""`, `last_assistant_message`가 다음 프롬프트 제안). 정체는 이렇다 — Claude Code가 턴이 끝난 뒤 **이름 없는 내부 서브에이전트로 프롬프트 제안을 만들고** 그것이 `SubagentStop`으로 새어 나온다. 고칠 방향도 그때 이미 (a) `agent_id`를 실은 이벤트를 메인 상태에서 제외로 적혀 있었다.
+  * Claude Code의 훅 규격이 공통 입력 필드에서 `agent_id`·`agent_type`을 **"`--agent`로 띄웠거나 서브에이전트 안에서 발화한 이벤트에만 있다"**고 정의한다. 즉 `agent_id`가 실려 있다는 것이 곧 "메인 스레드 상태가 아니다"의 규격상 표식이다.
+  * 결정: BUSY로 매핑되는 이벤트가 `agent_id`를 실었으면 상태 판정에서 제외한다. `prompt_id` 대조와 `_stopped_prompt_id` 상태는 제거했다.
+  * `prompt_id`로는 부족한 이유: 그 대조는 **직전에 끝난 턴**의 낙오자만 잡는다. 백그라운드 서브에이전트의 `PreToolUse`가 메인 `Stop` 뒤에 도착하는 경우까지 규칙 하나로 걸러지는 것은 `agent_id` 쪽이다. 이벤트 이름(`SubagentStop`)을 `EVENT_MEANING`에서 빼는 것보다도 넓다.
+  * `EVENT_MEANING`은 그대로 둔다. 표는 이벤트의 의미를 적는 곳이고, "누구의 상태인가"는 페이로드가 답하는 별개의 축이다.
+  * 정정: D-032 근거에 "`prompt_id`는 규격에 없는 필드"라고 쓸 뻔했으나 사실이 아니다. 「공통 입력 필드」에 정의되어 있고, 이벤트별 표에만 없다. 교체 이유는 필드의 문서화 여부가 아니라 **규칙의 범위**다.
+  * 검증: `test_phase9_hooks.py` 신규 10개 항목. 수정을 되돌리면 5개가 실패한다(낙오자 재진입 `t=6.72`, 서브에이전트 툴 호출 재진입 `t=6.45`, 주입 마크업 표시, emitter의 `prompt_id`·`agent_id` 미전달). 실물 검증: `AMASK_DEBUG`를 켠 채 `bin/amask claude`를 pty로 구동해 실제 `claude`가 보낸 `prompt_id`가 러너까지 도달하는 것을 확인했다(`hook UserPromptSubmit -> busy prompt_id=2e9e172f-...`, 같은 id의 `Stop`).
+  * 남은 것: 문서가 함께 제시한 (b) — 인터럽트에는 아무 훅도 발화하지 않아 걸린 BUSY의 유일한 탈출구가 `HOOK_STALL` 120초이고, 그래서 2분짜리 가짜 오버레이가 된다 — 는 손대지 않았다. 타이밍 상수와 합성 WAITING이 걸려 있어 이번 보고 범위 밖이다.

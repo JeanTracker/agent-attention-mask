@@ -13,7 +13,12 @@ import sys
 # Fields worth forwarding. The prompt is included because the panel shows what
 # was asked, and the hook reports it exactly -- no reconstructing it from
 # keystrokes. It stays in memory in the runner and is never written to disk.
-KEEP = ("session_id", "tool_name", "message", "prompt", "stop_hook_active")
+# agent_id marks an event fired inside a subagent, which is how the runner
+# tells a subagent's activity from the main thread's (D-033). prompt_id and
+# notification_type are here for the debug log, which has to be able to tell
+# the three state inputs apart.
+KEEP = ("session_id", "tool_name", "message", "prompt", "prompt_id",
+        "agent_id", "agent_type", "notification_type", "stop_hook_active")
 
 
 def main():

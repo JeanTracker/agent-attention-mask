@@ -195,6 +195,163 @@ def test_stale_fifos_are_swept():
     check("죽은 프로세스의 FIFO 정리", not os.path.exists(dead), "남아있음")
 
 
+# -- events that arrive after their turn stopped (D-032) --------------------
+
+
+def _seq_run(seq, total=14, timeout=20, **env):
+    """Drive the runner against a scripted hook sequence."""
+    base = {"HOOKED_SEQ": json.dumps(seq), "HOOKED_TOTAL": str(total),
+            "AMASK_IDLE_SILENCE": "1.0"}
+    base.update(env)
+    return run_in_pty(fixture("hooked_seq.py"), env=base,
+                      timeout=timeout, observe=True)
+
+
+def test_subagent_stop_after_its_stop_is_ignored():
+    """The measured shape: SubagentStop lands ~2s after the Stop of its turn.
+
+    Claude Code builds the next-prompt suggestion in an unnamed internal
+    subagent once the turn is over. Taking its SubagentStop for work re-covered
+    the screen and showed "working" while the agent sat idle -- the panel
+    disagreeing with iTerm2's own session status (D-033).
+    """
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "무엇이 문제인가"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+        [3.0, "PostToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+        [3.2, "Stop", {"prompt_id": "p1"}],
+        [5.3, "SubagentStop", {"prompt_id": "p1", "agent_type": "",
+                               "agent_id": "ae4865d65c745a4f0"}],
+    ])
+    check("Stop 시점에 덮여 있었다 (전제)",
+          any(is_rain(chunk) for t, chunk in res.timeline if t < 3.2),
+          "작업 중에도 덮이지 않아 이 케이스가 무의미하다")
+    after = [t for t, chunk in res.timeline if is_rain(chunk) and t > 4.0]
+    check("Stop 이후 도착한 SubagentStop이 화면을 다시 덮지 않음",
+          not after, f"재진입 t={after[0] if after else None}")
+
+
+def test_next_real_turn_still_covers():
+    """The guard keys on the stopped turn only, so the next one is unaffected."""
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "첫 질문"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+        [2.0, "Stop", {"prompt_id": "p1"}],
+        [2.6, "SubagentStop", {"prompt_id": "p1", "agent_type": "",
+                               "agent_id": "ae4865d65c745a4f0"}],
+        [3.4, "UserPromptSubmit", {"prompt_id": "p2", "prompt": "둘째 질문"}],
+        [3.6, "PreToolUse", {"prompt_id": "p2", "tool_name": "Bash"}],
+    ], total=12)
+    later = [t for t, chunk in res.timeline if is_rain(chunk) and t > 4.0]
+    check("다음 턴은 정상적으로 다시 덮인다", later,
+          "p2가 시작됐는데도 덮이지 않음")
+
+
+def test_background_subagent_tool_call_is_not_main_state():
+    """The spec's rule is about agent_id, not about one event name.
+
+    A background subagent's PreToolUse landing after the main thread's Stop
+    would otherwise re-cover the screen exactly like the suggestion subagent.
+    """
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "질문"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+        [3.2, "Stop", {"prompt_id": "p1"}],
+        [5.0, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash",
+                             "agent_id": "a4fa65ccfc10d929c",
+                             "agent_type": "general-purpose"}],
+    ])
+    after = [t for t, chunk in res.timeline if is_rain(chunk) and t > 4.0]
+    check("서브에이전트의 툴 호출도 메인 상태로 읽지 않음",
+          not after, f"재진입 t={after[0] if after else None}")
+
+
+def test_main_thread_tool_call_still_counts():
+    """And an event without agent_id is still the main thread working."""
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "질문"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+        [2.0, "Stop", {"prompt_id": "p1"}],
+        [3.4, "UserPromptSubmit", {"prompt_id": "p2", "prompt": "다음 질문"}],
+        [3.6, "PreToolUse", {"prompt_id": "p2", "tool_name": "Bash"}],
+    ], total=12)
+    later = [t for t, chunk in res.timeline if is_rain(chunk) and t > 4.0]
+    check("agent_id 없는 이벤트는 여전히 메인 작업", later, "덮이지 않음")
+
+
+def test_notification_does_not_close_the_turn():
+    """A permission prompt is mid-turn, so the work after approval still counts.
+
+    Marking the turn stopped on Notification would make every PreToolUse that
+    follows the user's approval look like a straggler.
+    """
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "질문"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+        [1.8, "Notification", {"prompt_id": "p1",
+                               "notification_type": "tool_permission",
+                               "message": "Claude needs your permission"}],
+        [3.2, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+    ], total=12)
+    resumed = [t for t, chunk in res.timeline if is_rain(chunk) and t > 3.6]
+    check("Notification 이후의 같은 턴 작업은 여전히 작업으로 인정",
+          resumed, "승인 후 작업인데 덮이지 않음")
+
+
+# -- prompts the harness injected, not the user (D-031) ---------------------
+
+
+TASK_NOTIFICATION = (
+    "<task-notification>\n<task-id>bwr0likft</task-id>\n"
+    "<tool-use-id>toolu_01DKa4dFc5CnuyJphXuCwNeW</tool-use-id>\n"
+    "<status>completed</status>\n</task-notification>"
+)
+
+
+def test_injected_prompt_stays_off_the_panel():
+    """A finished background task arrives as UserPromptSubmit carrying markup.
+
+    The panel showed that markup where the question belongs. It should keep
+    showing what the user actually asked.
+    """
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "레인 색을 고쳐줘"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+        [2.0, "Stop", {"prompt_id": "p1"}],
+        [3.0, "UserPromptSubmit", {"prompt_id": "p2", "prompt": TASK_NOTIFICATION}],
+        [3.2, "PreToolUse", {"prompt_id": "p2", "tool_name": "Bash"}],
+    ], total=12)
+    check("주입된 알림 마크업이 패널에 나오지 않음",
+          b"task-notification" not in res.data, "패널에 마크업이 그려졌다")
+    check("사용자가 실제로 물어본 것이 패널에 유지됨",
+          "레인 색을 고쳐줘".encode() in res.data, "질문이 사라졌다")
+
+
+def test_real_prompt_still_reaches_the_panel():
+    """The filter must not swallow an ordinary question."""
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1",
+                                   "prompt": "왜 <div> 태그가 깨지나"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+    ], total=10)
+    check("꺽쇠가 들어간 평범한 질문은 그대로 표시",
+          "왜 <div> 태그가 깨지나".encode() in res.data, "질문이 걸러졌다")
+
+
+def test_emitter_forwards_prompt_id():
+    """The guard is worthless if prompt_id never leaves the hook process."""
+    channel = HookChannel(EMITTER)
+    channel.open()
+    subprocess.run([EMITTER, channel.path, "SubagentStop"],
+                   input=b'{"prompt_id":"p9","agent_id":"ag1","agent_type":""}')
+    time.sleep(0.2)
+    events = channel.read_events()
+    channel.close()
+    got = events[0] if events else {}
+    check("emitter가 prompt_id를 전달", got.get("prompt_id") == "p9", str(events))
+    check("emitter가 agent_id를 전달", got.get("agent_id") == "ag1", str(events))
+
+
 if __name__ == "__main__":
     for fn in list(globals().values()):
         if callable(fn) and getattr(fn, "__name__", "").startswith("test_"):
