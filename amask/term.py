@@ -25,7 +25,16 @@ CURSOR_SHOW = b"\x1b[?25h"
 # 1000h = button events, 1006h = SGR extended coordinates (P-204).
 MOUSE_ON = b"\x1b[?1000h\x1b[?1006h"
 MOUSE_OFF = b"\x1b[?1006l\x1b[?1000l"
-CLEAR_HOME = b"\x1b[2J\x1b[H"
+# ED 2 (`ESC[2J`) is not safe to use inside the alternate screen. iTerm2 sends
+# the grid to scrollback *before* clearing it, so on the branch where the agent
+# already owns the alternate buffer -- interactive claude's shape (D-010) --
+# wiping the rain wrote a frame of it into the user's history instead. That is
+# P-103's definition of a product failure, and it was measured, not inferred.
+# EL (`ESC[2K`) is not one of the three paths iTerm2 writes scrollback from
+# (newline scroll, autowrap, ED 2), so the screen is cleared a row at a time.
+# Ghostty never wrote scrollback from either, so this costs it nothing.
+HOME = b"\x1b[H"
+_ERASE_LINE = b"\x1b[%d;1H\x1b[2K"
 
 _GUARDED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
@@ -57,6 +66,12 @@ class TerminalController:
             except (BrokenPipeError, OSError):
                 return
             data = data[n:]
+
+    def clear_overlay_screen(self, rows=None):
+        """Blank the screen without ED 2, which iTerm2 spills to scrollback."""
+        if rows is None:
+            rows, _ = self.get_size()
+        self.write(b"".join(_ERASE_LINE % row for row in range(1, rows + 1)) + HOME)
 
     def get_size(self):
         """(rows, cols) of the real terminal, with a sane fallback."""
@@ -105,7 +120,8 @@ class TerminalController:
         if not self.is_tty or self._overlay:
             return
         seq = ALT_ENTER if take_alt else b""
-        self.write(seq + CURSOR_HIDE + MOUSE_ON + CLEAR_HOME)
+        self.write(seq + CURSOR_HIDE + MOUSE_ON)
+        self.clear_overlay_screen()
         self._overlay = True
         self._took_alt = take_alt
 
@@ -125,7 +141,9 @@ class TerminalController:
         if self._took_alt:
             self.write(MOUSE_OFF + CURSOR_SHOW + ALT_EXIT + CURSOR_SHOW)
         else:
-            self.write(MOUSE_OFF + CLEAR_HOME + CURSOR_SHOW)
+            self.write(MOUSE_OFF)
+            self.clear_overlay_screen()
+            self.write(CURSOR_SHOW)
         # The agent may have had mouse tracking or a hidden cursor of its own;
         # the lines above just cleared them, so put back what it asked for.
         self.write(restore)

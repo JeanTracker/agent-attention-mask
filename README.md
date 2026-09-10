@@ -38,10 +38,22 @@ ln -s "$PWD/bin/amask" ~/bin/amask   # to use it as in the examples above
 If stdout is not a tty (a pipe or a redirection), the runner decides there is no screen to
 hide and hands the process straight over with `execvp`.
 
-macOS + iTerm2 (any xterm-compatible terminal), Python 3 (verified on 3.14.6). In the iTerm2
-profile, use it with **"Save lines to scrollback in alternate screen mode" turned off** (the
-default). With it on, alternate screen content is saved to scrollback too and matrix residue
-is left behind.
+macOS + iTerm2 (any xterm-compatible terminal), Python 3 (verified on 3.14.6).
+
+**Turning off "Save lines to scrollback in alternate screen mode" in the iTerm2 profile is
+recommended. The default is on, so you have to turn it off yourself** — the registered
+default in 3.7.0 is on, and that value applies whenever the profile has no such key.
+
+The runner itself does not dirty scrollback regardless of this setting. The overlay emits
+neither a newline nor `ESC[2J`, so it never creates a line that can be pushed out of the
+alternate screen (D-037). Measurement confirms no matrix residue is left even with this
+option on.
+
+The reason to turn it off is **the agent's side**. A full-screen agent such as interactive
+`claude` redraws the screen with `ESC[2J` on every frame, and with this option on iTerm2 puts
+that screen into scrollback before clearing it. In one measurement, some 80 frames piled up
+over 9 seconds. This happens without the runner too, so the runner cannot prevent it — but
+unchecking this box makes it go away as well.
 
 ## How it works
 

@@ -45,7 +45,7 @@ from . import hooks
 from .hud import Hud
 from .inputline import InputLine
 from .rain import Rain
-from .term import CLEAR_HOME, TerminalController
+from .term import TerminalController
 
 USAGE = "사용법: amask <에이전트 명령> [인자...]"
 
@@ -773,7 +773,7 @@ class Runner:
         if self.term.in_overlay:
             self.rain.resize(rows, cols)
             self.hud.forget()  # the panel moves with the terminal size
-            self.term.write(CLEAR_HOME)
+            self.term.clear_overlay_screen(rows)
 
     # -- teardown helpers --------------------------------------------------
 

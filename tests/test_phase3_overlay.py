@@ -6,10 +6,14 @@ input). Timing is compressed by harness.FAST_TIMING: the screen is covered
 1s after the agent starts working rather than the default 4s.
 """
 
+import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from harness import fixture, is_rain, run_in_pty
+from amask.term import TerminalController
 
 ALT_ENTER = b"\x1b[?1049h"
 ALT_EXIT = b"\x1b[?1049l"
@@ -107,6 +111,55 @@ def test_mouse_click_wakes_without_injecting_garbage():
         timeout=20,
     )
     check("SC-002/P-204 마우스 클릭 깨우기 + 잔여 이벤트 삼킴", b"GOT:hello" in res.data, repr(res.data[-160:]))
+
+
+def test_the_overlay_never_sends_ed2():
+    """P-103 by construction: ED 2 inside the alternate screen spills.
+
+    iTerm2 copies the grid into scrollback before ED 2 clears it, so a single
+    `ESC[2J` between 1049h and 1049l puts a frame of rain into the user's
+    history -- measured on the branch where the agent owns the alternate
+    buffer. The terminal's own behaviour cannot be reproduced inside a pty,
+    but the byte that triggers it can be, so this
+    guards the invariant the fix rests on rather than the leak itself.
+    """
+    class Capture(TerminalController):
+        """Every byte the controller would put on the tty, and none of the
+        agent's -- a pty capture mixes the two, and a full-screen agent
+        repaints with ED 2 of its own."""
+
+        def __init__(self):
+            super().__init__()
+            self.is_tty = True
+            self.out = bytearray()
+
+        def write(self, data):
+            self.out += data.encode() if isinstance(data, str) else data
+
+        def get_size(self):
+            return (24, 80)
+
+    for name, take_alt in (("러너가 대체 화면을 열 때", True),
+                           ("에이전트가 이미 쥐고 있을 때", False)):
+        term = Capture()
+        term.enter_overlay(take_alt=take_alt)
+        covered = len(term.out)
+        term.exit_overlay()
+        check(f"P-103 오버레이 구간에 ED 2 없음 ({name})",
+              b"\x1b[2J" not in term.out,
+              f"ED 2 {term.out.count(b'\x1b[2J')}회")
+        check(f"화면은 여전히 지워진다 ({name})",
+              b"\x1b[2K" in term.out[:covered], "지우는 시퀀스가 없다")
+
+    # The one place ED 2 is still fine is a line-oriented agent's own output,
+    # which the runner only passes through.
+    res = run_in_pty(fixture("chatty.py", 6), timeout=14, observe=True)
+    enter = res.data.find(ALT_ENTER)
+    leave = res.data.find(ALT_EXIT, enter + 1) if enter >= 0 else -1
+    window = res.data[enter:leave] if 0 <= enter < leave else b""
+    check("실제 실행에서도 오버레이 구간에 ED 2 없음",
+          enter >= 0 and b"\x1b[2J" not in window,
+          f"ED 2 {window.count(b'\x1b[2J')}회" if enter >= 0 else "1049h 없음")
 
 
 if __name__ == "__main__":
