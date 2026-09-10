@@ -37,6 +37,16 @@ RESET = "\x1b[0m"
 # Panel geometry, all from the spec.
 MIN_COLS = 34      # below this there is no room for a panel at all
 MIN_WIDTH = 34     # hint (23 columns) plus a 20-column value field
+
+# The wake hint, and the skip hint beside it (D-036). All ASCII, and all
+# narrower than the 23 columns the wake hint already claimed above -- panel
+# width comes from the terminal, not from the content, so a wider hint would
+# overflow rather than widen. The two skip forms are deliberately the same
+# length: the emphasis changes colour and weight, not geometry, so the panel
+# does not shift when the agent falls quiet.
+HINT_WAKE = "press any key to return"    # 23 columns
+HINT_SKIP = "q to skip this turn"        # 19
+HINT_SKIP_LOUD = "idle? q to skip now"   # 19
 MAX_WIDTH = 66     # a comfortable maximum line length for the prompt
 SIDE_MARGIN = 14   # 7 columns of live rain either side, so it reads as overlay
 PAD = 2            # left and right padding inside the panel
@@ -258,7 +268,8 @@ class Hud:
 
     # -- layout ------------------------------------------------------------
 
-    def layout(self, rows, cols, busy=True, since=None, hidden_bytes=0, frame=0):
+    def layout(self, rows, cols, busy=True, since=None, hidden_bytes=0, frame=0,
+               idle_hint=False):
         """Build the panel for this terminal, or None if it will not fit."""
         if cols < MIN_COLS:
             return None
@@ -303,7 +314,15 @@ class Hud:
             )
 
         blank()
-        lines.append(([], [(DIM, False, "press any key to return")]))
+        lines.append(([], [(DIM, False, HINT_WAKE)]))
+        if idle_hint:
+            # Nothing has come out of the agent for a while and the hook
+            # channel is still claiming work -- which is what an interrupted
+            # turn looks like, since interrupts fire no hook. The runner will
+            # not act on that suspicion; it points at the key instead.
+            lines.append(([], [(STATUS_WORK, True, HINT_SKIP_LOUD)]))
+        else:
+            lines.append(([], [(DIM, False, HINT_SKIP)]))
         blank()
 
         height = len(lines)
@@ -317,9 +336,9 @@ class Hud:
 
     # -- rendering ---------------------------------------------------------
 
-    def render(self, rows, cols, busy, since, hidden_bytes, frame):
+    def render(self, rows, cols, busy, since, hidden_bytes, frame, idle_hint=False):
         """Escape sequence for the panel, or b"" when nothing changed."""
-        panel = self.layout(rows, cols, busy, since, hidden_bytes, frame)
+        panel = self.layout(rows, cols, busy, since, hidden_bytes, frame, idle_hint)
         self._panel = panel
         if panel is None:
             self._last = None

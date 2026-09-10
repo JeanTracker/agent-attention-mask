@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from harness import fixture, is_rain, run_in_pty
 from amask.hooks import EVENT_MEANING, BUSY, WAITING, HookChannel
+from amask.hud import Hud
 
 ALT_EXIT = b"\x1b[?1049l"
 FAILURES = []
@@ -198,12 +199,12 @@ def test_stale_fifos_are_swept():
 # -- events that arrive after their turn stopped (D-032) --------------------
 
 
-def _seq_run(seq, total=14, timeout=20, **env):
+def _seq_run(seq, total=14, timeout=20, feed=(), **env):
     """Drive the runner against a scripted hook sequence."""
     base = {"HOOKED_SEQ": json.dumps(seq), "HOOKED_TOTAL": str(total),
             "AMASK_IDLE_SILENCE": "1.0"}
     base.update(env)
-    return run_in_pty(fixture("hooked_seq.py"), env=base,
+    return run_in_pty(fixture("hooked_seq.py"), env=base, feed=feed,
                       timeout=timeout, observe=True)
 
 
@@ -413,6 +414,98 @@ def test_the_injected_notification_turn_still_covers():
     later = [t for t, chunk in res.timeline if is_rain(chunk) and t > 5.0]
     check("주입된 알림이 연 턴은 작업으로 인정된다", later,
           "새 턴이 시작됐는데도 덮이지 않음")
+
+
+# -- the skip key (D-036) ---------------------------------------------------
+
+
+def test_skip_key_keeps_the_screen_uncovered_for_the_turn():
+    """Interrupting fires no hook, so the user needs a way out by hand.
+
+    The hook channel keeps claiming work for HOOK_STALL after an interrupt and
+    there is no event to release it. `q` while covered says "not this turn".
+    """
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "긴 작업"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+    ], total=14, timeout=20, feed=[(4.0, b"q")])
+    check("q 이전에 덮여 있었다 (전제)",
+          any(is_rain(chunk) for t, chunk in res.timeline if t < 4.0),
+          "덮이지 않아 이 케이스가 무의미하다")
+    after = [t for t, chunk in res.timeline if is_rain(chunk) and t > 5.5]
+    check("q 이후 같은 턴에서는 다시 덮지 않음",
+          not after, f"재진입 t={after[0] if after else None}")
+
+
+def test_other_keys_still_only_buy_reading_time():
+    """Every other key keeps the old promise: reading time, not a dismissal."""
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "긴 작업"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+    ], total=16, timeout=22, feed=[(4.0, b"x")])
+    after = [t for t, chunk in res.timeline if is_rain(chunk) and t > 5.5]
+    check("다른 키는 억제하지 않는다 (다시 덮인다)", after, "재진입하지 않음")
+
+
+def test_next_prompt_clears_the_skip():
+    """The skip is scoped to the turn the user skipped, not to the session."""
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "첫 작업"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+        [6.0, "UserPromptSubmit", {"prompt_id": "p2", "prompt": "둘째 작업"}],
+        [6.2, "PreToolUse", {"prompt_id": "p2", "tool_name": "Bash"}],
+    ], total=18, timeout=24, feed=[(4.0, b"q")])
+    skipped = [t for t, chunk in res.timeline if is_rain(chunk) and 5.0 < t < 6.0]
+    resumed = [t for t, chunk in res.timeline if is_rain(chunk) and t > 7.5]
+    check("억제 중에는 덮이지 않음", not skipped, f"t={skipped[0] if skipped else None}")
+    check("새 프롬프트가 오면 억제 해제", resumed, "다음 턴에도 덮이지 않음")
+
+
+def test_skip_key_does_not_reach_the_agent():
+    """D-008 still holds: the skip key is spent on the runner, not forwarded."""
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "작업"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+    ], total=12, timeout=18, feed=[(4.0, b"q")])
+    check("q가 에이전트 입력으로 새지 않음", b"SAW:q" not in res.data,
+          "픽스처가 q를 받았다")
+
+
+# -- the idle hint, which is emphasis and nothing else ----------------------
+
+
+def test_idle_hint_is_off_while_output_flows():
+    from amask.hud import HINT_SKIP, HINT_SKIP_LOUD
+
+    check("두 힌트 폭이 같다 (패널이 흔들리지 않음)",
+          len(HINT_SKIP) == len(HINT_SKIP_LOUD),
+          f"{len(HINT_SKIP)} vs {len(HINT_SKIP_LOUD)}")
+
+    hud = Hud("claude", "~/x")
+    hud.prompt = "질문"
+    plain = hud.layout(40, 100, busy=True, since=time.monotonic(), idle_hint=False)
+    loud = hud.layout(40, 100, busy=True, since=time.monotonic(), idle_hint=True)
+    flat = lambda panel: " ".join(
+        text for line in panel.lines for seg in line for _, _, text in seg)
+    check("평소에는 조용한 힌트", HINT_SKIP in flat(plain), flat(plain))
+    check("평소에는 강조 힌트가 없다", HINT_SKIP_LOUD not in flat(plain), flat(plain))
+    check("idle 의심 시 강조 힌트", HINT_SKIP_LOUD in flat(loud), flat(loud))
+    check("행 수는 그대로 (표시만 바뀜)",
+          len(plain.lines) == len(loud.lines),
+          f"{len(plain.lines)} vs {len(loud.lines)}")
+
+
+def test_idle_hint_never_touches_state():
+    """The one surviving silence threshold must not reach the state machine."""
+    import inspect
+
+    from amask import cli
+
+    source = inspect.getsource(cli.Runner._tick)
+    check("_tick은 _idle_suspected를 상태 판정에 쓰지 않음",
+          source.count("_idle_suspected") == 1
+          and "idle_hint=self._idle_suspected()" in source,
+          "상태 분기에서 참조됨")
 
 
 if __name__ == "__main__":

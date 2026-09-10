@@ -86,6 +86,23 @@ IDLE_SILENCE = _seconds("AMASK_IDLE_SILENCE", 1.5)
 # session is enough to cause.
 HOOK_STALL = _seconds("AMASK_HOOK_STALL", 120.0)
 
+# Interrupting a response fires no hook at all -- not Stop, not StopFailure,
+# not Notification -- so a latched BUSY has no event to release it and the
+# screen stays covered until HOOK_STALL runs out.
+# Detecting that by timing was rejected: a fullscreen agent goes byte-silent
+# for over two seconds mid-answer, so silence cannot be told from work without
+# a threshold, and a wrong call there uncovers the screen while the agent is
+# still writing (D-025, D-036). The user gets a key instead.
+#
+# This constant is the one place a silence threshold survives, and only
+# because it changes *emphasis* and nothing else: guessing wrong makes a hint
+# louder than it needed to be. It is deliberately not an env knob -- README's
+# timing section is for the three constants that decide state.
+IDLE_HINT_AFTER = 10.0
+
+# Pressed while the screen is covered, this skips the rest of the turn.
+SKIP_KEYS = (b"q", b"Q")
+
 # `UserPromptSubmit` does not only fire for things the user typed. The harness
 # injects its own messages as prompts -- a finished background task, a system
 # reminder -- and they arrive with the notification markup as the prompt text,
@@ -245,6 +262,9 @@ class Runner:
         self.hooks = hooks.HookChannel(_emitter_path())
         self._hook_state = None  # None until the agent reports something
         self._hook_at = 0.0
+        # Set by SKIP_KEYS, cleared when the next prompt is submitted: the
+        # user has said this turn is not worth covering.
+        self._skip_turn = False
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -369,6 +389,7 @@ class Runner:
                     since=self._busy_since or now,
                     hidden_bytes=self.log.pending,
                     frame=self._frame // 4,
+                    idle_hint=self._idle_suspected(),
                 )
                 self.rain.set_hole(self.hud.clear_spans(rows, cols))
                 self.rain.set_halo(self.hud.halo_spans(rows, cols))
@@ -424,6 +445,10 @@ class Runner:
                 _debug(f"hook {name} ignored: subagent {event.get('agent_id')}")
                 continue
 
+            if name == "UserPromptSubmit":
+                # A new turn: whatever the user skipped is over.
+                self._skip_turn = False
+
             prompt = event.get("prompt")
             if prompt:
                 # Straight from the agent, so no reconstructing it from
@@ -451,6 +476,16 @@ class Runner:
                 # The agent finished its turn or is asking the user something.
                 self._busy_since = None
                 self._wake()
+
+    def _idle_suspected(self):
+        """Hooks say working, but nothing has come out for a while.
+
+        Display only -- see IDLE_HINT_AFTER. This never feeds the state
+        machine, so a false positive costs a louder hint and nothing more.
+        """
+        if self._hook_state != hooks.BUSY or self._last_output is None:
+            return False
+        return (time.monotonic() - self._last_output) >= IDLE_HINT_AFTER
 
     def _hooks_speaking(self):
         """True while the agent's own report is still the best thing we have."""
@@ -486,6 +521,15 @@ class Runner:
             # bytes that woke us are discarded rather than forwarded -- an
             # Enter press must not submit an empty prompt or answer a pending
             # y/n confirmation.
+            #
+            # Which is exactly why the skip key can live here and nowhere else:
+            # nothing typed while covered reaches the agent, so spending `q`
+            # on the runner costs the agent nothing (D-008 still holds). While
+            # uncovered every byte is forwarded, and taking `q` out of that
+            # stream would eat the letter from what the user is typing.
+            if data.strip() in SKIP_KEYS:
+                self._skip_turn = True
+                _debug("skip: user asked to stay uncovered for this turn")
             self._wake()
             self._drain_stdin(WAKE_DRAIN)
             self._mouse_guard_until = time.monotonic() + WAKE_MOUSE_GUARD
@@ -620,6 +664,8 @@ class Runner:
         submitted = self._typing.feed(data)
         if submitted:
             self.hud.prompt = submitted
+            # The turn boundary for an agent that fires no hooks at all.
+            self._skip_turn = False
 
     def _should_cover(self, now):
         """Is the agent genuinely working, unattended, right now?
@@ -628,6 +674,13 @@ class Runner:
         recent typing (or a recent manual wake) means the user is at the
         keyboard, and the work has to be sustained rather than a stray repaint.
         """
+        if self._skip_turn:
+            # _wake() promises a keypress "buys reading time, not a permanent
+            # dismissal", and that is still true of every other key. This one
+            # is the exception the user asked for, because the case it covers
+            # -- an interrupted turn the hook channel never reports -- cannot
+            # be detected from the runner's side at all (D-036).
+            return False
         if now < self._hold_until:
             return False
         return self._busy_since is not None and (now - self._busy_since) >= OVERLAY_DELAY

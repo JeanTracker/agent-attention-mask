@@ -52,7 +52,18 @@ sys.stdout.write("ready\n")
 sys.stdout.flush()
 
 
+def echo_stdin():
+    """Report every byte that reaches us, so D-008 can be tested by absence."""
+    while True:
+        data = os.read(0, 1024)
+        if not data:
+            return
+        sys.stdout.write("SAW:%s" % data.decode("utf-8", "replace"))
+        sys.stdout.flush()
+
+
 threading.Thread(target=play, daemon=True).start()
+threading.Thread(target=echo_stdin, daemon=True).start()
 
 # An idle prompt's repaint, running the whole time: it must never on its own
 # convince the runner that there is work happening.

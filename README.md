@@ -64,6 +64,13 @@ to read, but covers again if the agent is still working. Typing resets the timer
 screen never covers mid-input. The key used to wake is not forwarded to the agent, so waking
 with Enter neither submits an empty prompt nor approves a pending y/n confirmation.
 
+**Pressing `q` while covered stops it covering again for that turn.** Submitting the next
+prompt lifts that automatically. This key is what you want when you have interrupted a
+response — an interrupt fires no hook at all, so the runner has no way to know the agent
+stopped and mistakes it for working for up to two minutes (`AMASK_HOOK_STALL`). When that
+state is suspected, the panel's hint changes to `idle? q to skip now`. Like every other wake
+key, `q` is not forwarded to the agent.
+
 ### What you see
 
 ```
@@ -76,6 +83,7 @@ with Enter neither submits an empty prompt nor approves a pending y/n confirmati
   BUFFERED  5.1KB (831 tokens)
 
                              press any key to return
+                                 q to skip this turn
 ```
 
 The rain uses only ASCII characters found on the keyboard and falls every other column.
