@@ -32,6 +32,7 @@ agent once it is genuinely busy. Reacting to single chunks is what made an idle
 prompt flash the screensaver open and shut on a loop.
 """
 
+import json
 import os
 import re
 import select
@@ -39,6 +40,8 @@ import signal
 import sys
 import time
 
+from . import config
+from . import control
 from . import ptyproxy
 from .logbuf import LogBuffer
 from . import hooks
@@ -47,7 +50,12 @@ from .inputline import InputLine
 from .rain import Rain
 from .term import TerminalController
 
-USAGE = "사용법: amask <에이전트 명령> [인자...]"
+USAGE = """사용법: amask <에이전트 명령> [인자...]
+        amask --top                    실행 중인 세션을 한 화면에서 보고 조작
+        amask --ls                     실행 중인 세션 목록
+        amask --config [키=값...]      기본 설정 보기/지정 (새 세션부터 적용)
+        amask --ctl <pid|last> <명령> [키=값...]
+                                       status | get | set | skip | wake"""
 
 # select() timeout: the animation tick, and how fast SIGWINCH/SIGCHLD flags are
 # noticed. 20fps is smooth enough and leaves SC-002's 0.2s budget untouched.
@@ -72,7 +80,8 @@ def _seconds(name, default):
 # seconds at a stretch (4.9s and 15s observed, with brief repaints every 8-10s),
 # so 1.5s clears the worst streaming pause by ~1.9x while staying far below any
 # real wait for the user.
-IDLE_SILENCE = _seconds("AMASK_IDLE_SILENCE", 1.5)
+SHIPPED_IDLE_SILENCE = 1.5
+IDLE_SILENCE = _seconds("AMASK_IDLE_SILENCE", SHIPPED_IDLE_SILENCE)
 
 # With hooks the agent says what it is doing, so silence proves nothing -- a
 # ten-minute tool call is silent and busy. This is only a backstop against a
@@ -84,7 +93,8 @@ IDLE_SILENCE = _seconds("AMASK_IDLE_SILENCE", 1.5)
 # an idle session drifted back to the heuristic and then re-covered itself the
 # moment its own footer repainted, which another terminal starting a Claude
 # session is enough to cause.
-HOOK_STALL = _seconds("AMASK_HOOK_STALL", 120.0)
+SHIPPED_HOOK_STALL = 120.0
+HOOK_STALL = _seconds("AMASK_HOOK_STALL", SHIPPED_HOOK_STALL)
 
 # Interrupting a response fires no hook at all -- not Stop, not StopFailure,
 # not Notification -- so a latched BUSY has no event to release it and the
@@ -123,7 +133,90 @@ INJECTED_PROMPT_PREFIXES = (
 # It also governs how long the screen is left alone after the user uncovered
 # it by hand -- one delay for both, rather than a second constant to reason
 # about (D-022). Uncovering by hand is just another reason the user is present.
-OVERLAY_DELAY = _seconds("AMASK_OVERLAY_DELAY", 4.0)
+SHIPPED_OVERLAY_DELAY = 4.0
+OVERLAY_DELAY = _seconds("AMASK_OVERLAY_DELAY", SHIPPED_OVERLAY_DELAY)
+
+# The three constants above decide state, and the same three are what an
+# external app may retune per session (D-039). They become instance values so
+# one runner's change cannot reach another's, and the module constants stay as
+# the defaults -- an env knob is still the way to set the value a session
+# *starts* with, which is what the test suite leans on.
+class Settings:
+    """The live, per-session copy of the three state constants."""
+
+    KEYS = ("idle_silence", "hook_stall", "overlay_delay")
+    # An upper bound so a typo cannot park the screensaver for a week. There is
+    # nothing magic about an hour; it is far past any plausible tuning and far
+    # short of "never".
+    LIMIT = 3600.0
+
+    def __init__(self, idle_silence, hook_stall, overlay_delay):
+        self.idle_silence = idle_silence
+        self.hook_stall = hook_stall
+        self.overlay_delay = overlay_delay
+
+    @classmethod
+    def from_env(cls):
+        """The three module constants, which already fold in the env knobs."""
+        return cls(IDLE_SILENCE, HOOK_STALL, OVERLAY_DELAY)
+
+    @classmethod
+    def shipped(cls):
+        """What the code itself says, with no env and no stored file.
+
+        The module constants read the env at import, so an env knob is what
+        makes them differ from these. That difference is how `resolve` can
+        tell "the user set this for this invocation" from "nobody said".
+        """
+        return {"idle_silence": SHIPPED_IDLE_SILENCE,
+                "hook_stall": SHIPPED_HOOK_STALL,
+                "overlay_delay": SHIPPED_OVERLAY_DELAY}
+
+    @classmethod
+    def resolve(cls):
+        """What this session starts with: code < stored file < env (D-041).
+
+        The env knob stays above the file because it belongs to one
+        invocation -- `AMASK_OVERLAY_DELAY=1 amask claude` has to mean this
+        run, whatever is stored.
+        """
+        values = config.merge(cls.shipped())
+        for key, name in (("idle_silence", "AMASK_IDLE_SILENCE"),
+                          ("hook_stall", "AMASK_HOOK_STALL"),
+                          ("overlay_delay", "AMASK_OVERLAY_DELAY")):
+            if name in os.environ:
+                # The module constant already is the env value, clamp included.
+                values[key] = getattr(cls.from_env(), key)
+        return cls(**values)
+
+    def as_dict(self):
+        return {key: getattr(self, key) for key in self.KEYS}
+
+    def update(self, values):
+        """Apply a validated batch. Returns an error string, or None on success.
+
+        All or nothing: a batch with one bad member changes nothing, so a
+        client cannot half-apply a change and be told it failed.
+        """
+        if not isinstance(values, dict) or not values:
+            return "settings must be a non-empty object"
+        checked = {}
+        for key, raw in values.items():
+            if key not in self.KEYS:
+                return f"unknown setting: {key}"
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                return f"{key}: not a number"
+            if value != value or value in (float("inf"), float("-inf")):
+                return f"{key}: not finite"
+            if not 0.0 <= value <= self.LIMIT:
+                return f"{key}: out of range 0..{self.LIMIT:g}"
+            checked[key] = value
+        for key, value in checked.items():
+            setattr(self, key, value)
+        return None
+
 
 # After a wake gesture, keep eating stdin briefly. A mouse click's release
 # event (\x1b[<0;10;5m) arrives after we have already sent MOUSE_OFF, and those
@@ -225,6 +318,17 @@ def main(argv=None):
         print(USAGE, file=sys.stderr)
         return 0 if argv else 2
 
+    if argv[0] == "--top":
+        from . import top
+
+        return top.main()
+    if argv[0] == "--config":
+        return _cmd_config(argv[1:])
+    if argv[0] == "--ls":
+        return _cmd_list()
+    if argv[0] == "--ctl":
+        return _cmd_control(argv[1:])
+
     term = TerminalController()
     if not term.is_tty:
         # Nothing to hide, so the wrapper has nothing to add. Hand the process
@@ -232,6 +336,127 @@ def main(argv=None):
         os.execvp(argv[0], argv)
 
     return Runner(term, argv).run()
+
+
+# -- the client side of the control channel (D-039) -------------------------
+#
+# The point of the channel is an external app, and an app is not allowed in
+# this repo (no GUI dependency). These two subcommands are how the channel is
+# used by hand, and how it is checked to be working at all. They take dashed
+# names so they cannot shadow an agent: `amask ls` has to keep meaning "run ls
+# under the screensaver".
+
+
+def _cmd_list():
+    found = control.sessions()
+    if not found:
+        print("실행 중인 amask 세션이 없다.", file=sys.stderr)
+        return 1
+    for info in found:
+        # Collapsed and clipped: an agent invoked with `-c` carries newlines in
+        # its own argv, and a listing has to stay one line per session.
+        argv = " ".join(" ".join(info.get("argv") or []).split())[:60]
+        line = f"{info.get('pid')}\t{argv}"
+        if info.get("session_id"):
+            line += f"\t{info['session_id']}"
+        print(line)
+    return 0
+
+
+def _cmd_config(args):
+    """Show or change the stored defaults (D-041).
+
+    With no arguments it prints the file and what a new session would start
+    with -- those differ whenever an env knob is set, and that difference is
+    the thing people get wrong.
+    """
+    if not args:
+        stored = config.load()
+        print(f"파일: {config.path()}" + ("" if stored else " (없음)"))
+        for key in sorted(Settings.KEYS):
+            shipped = Settings.shipped()[key]
+            line = f"  {key:<14} 기본 {shipped:g}"
+            if key in stored:
+                line += f"  저장 {stored[key]:g}"
+            print(line)
+        print("새 세션이 시작할 값:")
+        effective = Settings.resolve().as_dict()
+        for key in sorted(effective):
+            print(f"  {key:<14} {effective[key]:g}")
+        return 0
+
+    values = dict(config.load())
+    for item in args:
+        key, sep, raw = item.partition("=")
+        if not sep:
+            print(f"키=값 꼴이어야 한다: {item}", file=sys.stderr)
+            return 2
+        if key not in Settings.KEYS:
+            print(f"모르는 설정: {key} (가능한 것: {', '.join(Settings.KEYS)})",
+                  file=sys.stderr)
+            return 2
+        if raw == "":
+            # `key=` removes the stored value, which is how you get back to
+            # the shipped default without editing JSON by hand.
+            values.pop(key, None)
+            continue
+        values[key] = raw
+
+    # Validated by the same object the socket uses, so a stored value can
+    # never be one the running state machine would refuse.
+    probe = Settings(**Settings.shipped())
+    if values:
+        error = probe.update(values)
+        if error:
+            print(error, file=sys.stderr)
+            return 2
+    try:
+        # Only the keys that are still stored. Removing the last one has to
+        # leave an empty file, not a file full of the shipped values.
+        written = config.save({key: probe.as_dict()[key] for key in values})
+    except OSError as exc:
+        print(f"저장하지 못했다: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(written, indent=2, sort_keys=True))
+    print("새 세션부터 적용된다. 돌고 있는 세션에는 `--top`에서 적용할 수 있다.",
+          file=sys.stderr)
+    return 0
+
+
+def _cmd_control(args):
+    if not args:
+        print(USAGE, file=sys.stderr)
+        return 2
+    target, cmd, rest = args[0], (args[1] if len(args) > 1 else "status"), args[2:]
+    found = control.sessions()
+    if not found:
+        print("실행 중인 amask 세션이 없다.", file=sys.stderr)
+        return 1
+    if target == "last":
+        info = found[-1]
+    else:
+        info = next((s for s in found if str(s.get("pid")) == target), None)
+        if info is None:
+            print(f"그런 세션이 없다: {target}", file=sys.stderr)
+            return 1
+
+    payload = {"cmd": cmd}
+    if rest and cmd != "set":
+        print(f"{cmd}은 인자를 받지 않는다: {' '.join(rest)}", file=sys.stderr)
+        return 2
+    if rest:
+        values = {}
+        for item in rest:
+            key, _, value = item.partition("=")
+            values[key] = value
+        payload["settings"] = values
+    try:
+        reply = control.request(info, payload)
+    except (OSError, ValueError) as exc:
+        print(f"세션에 닿지 못했다: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(reply, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if reply.get("ok") else 1
 
 
 class Runner:
@@ -260,6 +485,11 @@ class Runner:
         self._frame = 0
         self.hud = Hud(" ".join(argv), _short_path(os.getcwd()))
         self.hooks = hooks.HookChannel(_emitter_path())
+        # Per session, so an external app retuning one runner cannot reach
+        # another (D-039). The module constants are the starting values.
+        self.settings = Settings.resolve()
+        self.control = control.ControlChannel()
+        self._session_id = None  # arrives with the first hook event
         self._hook_state = None  # None until the agent reports something
         self._hook_at = 0.0
         # Set by SKIP_KEYS, cleared when the next prompt is submitted: the
@@ -285,7 +515,15 @@ class Runner:
         # The work clock starts now, because an agent that has not spoken yet is
         # working -- a one-shot run is silent for its whole thinking time.
         self._busy_since = time.monotonic()
-        self._hold_until = self._busy_since + OVERLAY_DELAY
+        self._hold_until = self._busy_since + self.settings.overlay_delay
+        # After the spawn on purpose. Python leaves sockets non-inheritable
+        # (PEP 446) so an exec would close it anyway, but opening it on this
+        # side of the fork means the agent never has the fd at all -- reaching
+        # its own runner's controls would be a P-101 hole.
+        self.control.open({
+            "argv": self.argv,
+            "started": time.time(),
+        })
 
         try:
             self._loop()
@@ -294,6 +532,7 @@ class Runner:
             self.term.restore()
             self.log.close()
             self.hooks.close()
+            self.control.close()
             if self.master_fd is not None:
                 try:
                     os.close(self.master_fd)
@@ -326,6 +565,8 @@ class Runner:
             watch = [self.master_fd] + ([self.term.in_fd] if self._watch_stdin else [])
             if self.hooks.available:
                 watch.append(self.hooks.fileno())
+            control_fds = self.control.fds()
+            watch += control_fds
             try:
                 readable, _, _ = select.select(watch, [], [], TICK)
             except InterruptedError:
@@ -345,6 +586,12 @@ class Runner:
             if self._watch_stdin and self.term.in_fd in readable:
                 if not self._handle_stdin():
                     return
+
+            if control_fds:
+                # After stdin and before the tick: a `set` this cycle takes
+                # effect this cycle, and a `status` reports the state the
+                # user's own keystrokes have already been folded into.
+                self.control.service(readable, self._handle_control)
 
             self._tick()
 
@@ -445,11 +692,30 @@ class Runner:
                 _debug(f"hook {name} ignored: subagent {event.get('agent_id')}")
                 continue
 
-            if name == "UserPromptSubmit":
-                # A new turn: whatever the user skipped is over.
+            prompt = event.get("prompt")
+
+            session_id = event.get("session_id")
+            if session_id and session_id != self._session_id:
+                # The agent's own id for this session. It is the one thing an
+                # external app cannot get from the filesystem, and it only
+                # exists once the agent has fired a hook, so the discovery
+                # file is rewritten rather than born with it.
+                self._session_id = session_id
+                self.control.update_info({"session_id": session_id})
+
+            if name == "UserPromptSubmit" and not (
+                prompt and _is_injected_prompt(prompt)
+            ):
+                # A new turn the *user* opened: whatever they skipped is over.
+                # An injected notification opens a turn too, and that turn is
+                # busy enough to cover (D-035) -- but it is the harness
+                # reporting on work the skipped request started, not the user
+                # asking for something new, so it must not release the skip
+                # (D-038). A turn with no prompt text at all is treated as
+                # real: an agent on the FIFO without Claude Code's payload has
+                # no other turn boundary to offer.
                 self._skip_turn = False
 
-            prompt = event.get("prompt")
             if prompt:
                 # Straight from the agent, so no reconstructing it from
                 # keystrokes -- and no way for it to come out garbled. But only
@@ -477,6 +743,79 @@ class Runner:
                 self._busy_since = None
                 self._wake()
 
+    # -- the control channel ------------------------------------------------
+
+    def _handle_control(self, request):
+        """One command from an external app (D-039). Returns the reply.
+
+        Reading is unrestricted; the two commands that change something are
+        the two gestures the user already has at the keyboard, and neither
+        can make the runner do something a keypress could not.
+        """
+        cmd = request.get("cmd")
+        if cmd == "status":
+            return {"ok": True, "status": self._status_report()}
+        if cmd == "get":
+            return {"ok": True, "settings": self.settings.as_dict()}
+        if cmd == "set":
+            error = self.settings.update(request.get("settings"))
+            if error:
+                return {"ok": False, "reason": error}
+            _debug(f"control: set {self.settings.as_dict()}")
+            return {"ok": True, "settings": self.settings.as_dict()}
+        if cmd == "wake":
+            # Exactly SC-002's wake gesture, and as harmless: the screen
+            # coming back is never the wrong answer.
+            self._wake()
+            return {"ok": True}
+        if cmd == "skip":
+            # `q` is gated on being covered because taking the letter while
+            # uncovered would eat it from what the user is typing (D-036) --
+            # a keyboard argument that says nothing about a socket. What has
+            # to hold instead is that there is a turn to skip: during a
+            # WAITING span the next `UserPromptSubmit` would clear the flag
+            # (D-038), so accepting it there would report a success that
+            # quietly evaporates.
+            if self._busy_since is None:
+                return {"ok": False, "reason": "no turn in progress"}
+            self._skip_turn = True
+            self._wake()
+            _debug("control: skip this turn")
+            return {"ok": True, "status": self._status_report()}
+        return {"ok": False, "reason": f"unknown command: {cmd}"}
+
+    def _status_report(self):
+        """What the runner knows, as an external app would ask it."""
+        now = time.monotonic()
+        state = self._hook_state
+        return {
+            "pid": os.getpid(),
+            "session_id": self._session_id,
+            "argv": self.argv,
+            "cwd": os.getcwd(),
+            # The screen right now, which is the one thing no other channel
+            # can report -- everything else here the hooks also carry.
+            "covered": self.term.in_overlay,
+            "busy": self._busy_since is not None,
+            "busy_seconds": (now - self._busy_since) if self._busy_since else 0.0,
+            "hooks": self.hooks.available,
+            "hook_state": state,
+            "skip_turn": self._skip_turn,
+            "idle_suspected": self._idle_suspected(),
+            # The user asked for this by name: without the question, a list of
+            # sessions is a list of pids. It is the agent's own report of what
+            # was asked (D-031 keeps injected markup out of it) and it stays
+            # in memory -- the runner never writes it to disk.
+            "prompt": self.hud.prompt,
+            # Scraped from the agent's own status line, so possibly empty --
+            # the detail pane leaves the field out rather than showing "-"
+            # for an agent that prints neither (D-043).
+            "model": self.hud.model,
+            "tokens": self.hud.tokens,
+            "hidden_bytes": self.log.pending,
+            "settings": self.settings.as_dict(),
+        }
+
     def _idle_suspected(self):
         """Hooks say working, but nothing has come out for a while.
 
@@ -493,7 +832,7 @@ class Runner:
             return False
         if self._hook_state != hooks.BUSY:
             return True  # a waiting agent stays waiting until it says otherwise
-        return (time.monotonic() - self._hook_at) < HOOK_STALL
+        return (time.monotonic() - self._hook_at) < self.settings.hook_stall
 
     def _handle_stdin(self):
         """Returns False if the loop should stop."""
@@ -552,7 +891,7 @@ class Runner:
         self._capture_prompt(data)
 
         # Real input: the user is present, so hold the screensaver off.
-        self._hold_until = time.monotonic() + OVERLAY_DELAY
+        self._hold_until = time.monotonic() + self.settings.overlay_delay
         try:
             os.write(self.master_fd, data)
         except OSError:
@@ -657,7 +996,7 @@ class Runner:
         """
         if self._last_output is None:
             return False
-        return (time.monotonic() - self._last_output) >= IDLE_SILENCE
+        return (time.monotonic() - self._last_output) >= self.settings.idle_silence
 
     def _capture_prompt(self, data):
         """Track the line being typed so the overlay can show what was asked."""
@@ -683,7 +1022,9 @@ class Runner:
             return False
         if now < self._hold_until:
             return False
-        return self._busy_since is not None and (now - self._busy_since) >= OVERLAY_DELAY
+        return self._busy_since is not None and (
+            (now - self._busy_since) >= self.settings.overlay_delay
+        )
 
     def _sleep(self):
         """Cover the screen with the rain."""
@@ -729,7 +1070,7 @@ class Runner:
 
         if repainting or not took_alt:
             self._nudge_repaint()
-        self._hold_until = time.monotonic() + OVERLAY_DELAY
+        self._hold_until = time.monotonic() + self.settings.overlay_delay
 
     def _nudge_repaint(self):
         """Make a full-screen agent redraw itself from scratch.

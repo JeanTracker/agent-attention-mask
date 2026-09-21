@@ -2,7 +2,9 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# realpath, not abspath: this script is meant to be symlinked onto PATH, and a
+# symlink's abspath is the link's own directory -- which holds no amask package.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 from amask.cli import main
 

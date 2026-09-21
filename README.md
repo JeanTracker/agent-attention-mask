@@ -27,18 +27,66 @@ own state over Claude Code hooks.
 
 ## Installing and running
 
-There is no packaging. Clone the repository and call `bin/amask` directly, or symlink it onto
-your PATH.
+Python 3 (verified on 3.14.6) and an xterm-compatible terminal; macOS + iTerm2 is what this
+is tested on. Nothing else — the standard library is the whole dependency list, and there is
+no packaging step. The clone is the installation.
 
 ```sh
-./bin/amask <agent command> [args...]
-ln -s "$PWD/bin/amask" ~/bin/amask   # to use it as in the examples above
+git clone https://github.com/JeanTracker/agent-attention-mask.git amask && cd amask
+./bin/amask claude
 ```
+
+To call it from anywhere, symlink the launcher into a directory already on your PATH. On
+macOS `~/.local/bin` usually is and `~/bin` usually is not, so check before you pick one.
+
+```sh
+ln -s "$PWD/bin/amask" ~/.local/bin/amask
+```
+
+Leave the clone where it is. The launcher resolves the symlink back to the clone to find
+both the package and the hook emitter, so moving the clone breaks the link.
 
 If stdout is not a tty (a pipe or a redirection), the runner decides there is no screen to
 hide and hands the process straight over with `execvp`.
 
-macOS + iTerm2 (any xterm-compatible terminal), Python 3 (verified on 3.14.6).
+### Wrapping `claude` by default
+
+To have every interactive session run covered without typing `amask` each time, alias it.
+What the alias should say depends on what `claude` already is, so ask first:
+
+```sh
+type claude
+```
+
+**If the answer is a path**, the plain alias works. bash, zsh and ksh all take the same
+line; only the file it belongs in differs — `~/.zshrc`, `~/.bashrc` on Linux, or
+`~/.bash_profile` for the login shells macOS Terminal starts.
+
+```sh
+alias claude='amask claude'
+```
+
+**If the answer is an alias of its own**, you are on an older Claude Code install, which
+wires up `alias claude=~/.claude/local/claude` because that path is not on PATH.
+Overwriting it leaves amask calling a `claude` that PATH cannot find, so pass the path
+through instead — and carry over any flags the old alias had, because losing them is silent:
+
+```sh
+alias claude='amask ~/.claude/local/claude'
+```
+
+Either way the argument's basename has to stay `claude`. That is what the runner matches on
+before it injects its hook settings, and a name that does not match drops the session to
+the timing heuristics. `command claude` and `\claude` still run the agent unwrapped when
+you want it.
+
+What to avoid is a wrapper script named `claude` placed earlier on PATH. The runner launches
+the agent with `execvp`, which resolves the name `claude` through PATH again, finds the
+wrapper, and calls back into amask — forever. A shim that execs an absolute path does work,
+and covers the non-interactive shells an alias never reaches; the alias is just the version
+with less to get wrong.
+
+### The iTerm2 scrollback setting
 
 **Turning off "Save lines to scrollback in alternate screen mode" in the iTerm2 profile is
 recommended. The default is on, so you have to turn it off yourself** — the registered
@@ -54,6 +102,15 @@ The reason to turn it off is **the agent's side**. A full-screen agent such as i
 that screen into scrollback before clearing it. In one measurement, some 80 frames piled up
 over 9 seconds. This happens without the runner too, so the runner cannot prevent it — but
 unchecking this box makes it go away as well.
+
+### Uninstalling
+
+Remove the symlink, remove the alias line from your shell's rc file, delete the clone.
+Nothing was registered anywhere else: the hook settings are handed to Claude Code on its
+own command line for that one run and never written into `~/.claude/settings.json`, and
+the FIFO each runner opens is unlinked when it exits. The one thing that outlives a
+session is `~/.amask` — the defaults saved by `--config` and the control sockets — and
+`rm -rf ~/.amask` is safe once nothing is running.
 
 ## How it works
 
@@ -76,12 +133,14 @@ to read, but covers again if the agent is still working. Typing resets the timer
 screen never covers mid-input. The key used to wake is not forwarded to the agent, so waking
 with Enter neither submits an empty prompt nor approves a pending y/n confirmation.
 
-**Pressing `q` while covered stops it covering again for that turn.** Submitting the next
-prompt lifts that automatically. This key is what you want when you have interrupted a
-response — an interrupt fires no hook at all, so the runner has no way to know the agent
-stopped and mistakes it for working for up to two minutes (`AMASK_HOOK_STALL`). When that
-state is suspected, the panel's hint changes to `idle? q to skip now`. Like every other wake
-key, `q` is not forwarded to the agent.
+**Pressing `q` while covered stops it covering again for that turn.** That holds for the
+whole request, including any subagent it started: work reported after the skip -- a
+subagent's tool calls, a background task announcing that it finished -- does not bring the
+rain back. Submitting the next prompt yourself lifts it automatically. This key is what you
+want when you have interrupted a response — an interrupt fires no hook at all, so the
+runner has no way to know the agent stopped and mistakes it for working for up to two
+minutes (`AMASK_HOOK_STALL`). When that state is suspected, the panel's hint changes to
+`idle? q to skip now`. Like every other wake key, `q` is not forwarded to the agent.
 
 ### What you see
 
@@ -189,6 +248,116 @@ state.
 
 **`AMASK_DEBUG`** — if set, record every cover/uncover judgement to that file.
 
+These three env values set what a session *starts* with. From then on the same three can be
+retuned per session over the control socket below, which overrides the env value for that
+runner only and is never written to disk — a new session starts from the env again.
+
+**`AMASK_RUN_DIR`** — where the control socket and its discovery file live. Defaults to
+`~/.amask/run`.
+
+**`AMASK_CONFIG`** — the stored defaults file. Defaults to `~/.amask/config.json`.
+
+### Watching and steering a session from outside
+
+Each runner opens a Unix socket so something other than the terminal it is running in can
+see what it is doing. `amask --top` is the view onto it — every session on one screen,
+refreshed twice a second:
+
+```
+ amask  세션 3개  (2개 선택)
+   PID      화면  상태                  덮기   폴더                프롬프트
+*  23875    덮임  작업                  4s     amask               기본 설정 기능 넣어줘
+   24110    열림  대기·건너뜀           20s    release-notes       릴리스 노트 초안 써줘
+*  24777    덮임  작업                  8s     amask               테스트 전부 돌려줘
+기본설정 overlay_delay=8 -> 2개 세션에 적용
+space 선택  a 전체  enter 상세  d 기본  s 건너뜀  w 깨우기  +/- 덮기  [/] 유휴  r 갱신  q 종료
+```
+
+`space` marks a session (`a` marks them all) and every command then applies to the marked
+ones: `s` skips their turn (the same thing as pressing `q` in each), `w` wakes them, `d`
+pushes the stored defaults into them, `+`/`-` move their cover delay and `[`/`]` their idle
+threshold. With nothing marked, the highlighted row is the target. It is `curses` rather than
+a window because a toolkit would be a dependency (D-006); a native app can be written against
+the same socket.
+
+`enter` opens the highlighted session on its own screen — the agent's session id, the working
+directory in full, when it started, how long it has been working, how much output is hidden,
+the model and token count it is reporting, all three timing values and the prompt in full
+rather than folded to one line (D-043, D-044). It keeps refreshing while it
+is open, and the same commands work there, except that they apply to the session you are
+looking at and ignore the marks. `esc`, `enter` or backspace goes back to the list; a session
+that exits while you are reading it drops you back with a note.
+
+Neither screen cuts anything off on a short window (D-045). The list scrolls to keep the
+cursor in view, the pane scrolls with `↑↓`/`jk`, `space`/`b` by the page and `g`/`G` to
+either end, and the title says how much is off-screen in each direction (`↑3 ↓12`) so a
+short window is not mistaken for a short list.
+
+```
+ amask  세션 23875  [덮임]
+
+  PID           23875
+  명령          claude --resume
+  세션 id       sess-abc
+  폴더          /home/me/work
+  시작          2026-09-21 14:02:11 (3분 전)
+
+  화면          덮임 (레인이 올라가 있다)
+  상태          작업
+  작업 시간     54.2s
+  특이사항      훅은 작업 중이라는데 출력이 끊겼다
+  모델          Opus 5
+  숨긴 출력     43K (43869B, 덮개가 걷히면 그대로 나온다)
+
+  덮기 지연     4s
+  유휴 임계     1.5s
+  훅 정체       120s
+
+  프롬프트      기본 설정 기능 넣어줘
+↑↓ 스크롤  esc/enter 목록  s 건너뜀  w 깨우기  +/- 덮기  [/] 유휴  d 기본  r 갱신  q 종료
+```
+
+### The stored defaults
+
+`amask --config` is what a *new* session starts with, kept in `~/.amask/config.json`:
+
+```sh
+amask --config                        # stored values, and what a new session gets
+amask --config overlay_delay=8        # store one
+amask --config overlay_delay=         # forget it again
+```
+
+Narrowest wins: the shipped default, then this file, then an env knob (it belongs to one
+invocation), then a session's own `set` over the socket. Changing the file does not reach
+sessions that are already running — `d` in `--top` is the deliberate act that does, on as
+many sessions as you marked.
+
+The same channel answers one question at a time, for scripts and for a quick look:
+
+```sh
+amask --ls                            # pid, agent command, session id
+amask --ctl last status               # covered? working? what was asked?
+amask --ctl last set overlay_delay=8  # retune this session, live
+amask --ctl last skip                 # same as pressing q
+amask --ctl last wake                 # same as touching a key
+```
+
+`--ctl` takes a pid or `last`. `status` reports whether the screen is covered right now, how
+long the agent has been working, the agent's own session id, the question the user asked, how
+many bytes are being held back, the model and token count scraped from the agent's own status
+line (empty for an agent that prints neither), and the session's current timing values.
+
+`examples/watch_sessions.py` is the smallest external client: it lists every session, prints
+one line each, and can push a `set`/`skip`/`wake` to all of them. Its bottom comment is the
+whole protocol — read `~/.amask/run/amask-ctl-<pid>.json` for the socket path and token,
+connect, send one JSON object per line, read one back — so a client in any language is the
+same twenty lines.
+
+The socket lives in `~/.amask/run` at 0600 inside a 0700 directory, beside a discovery file
+carrying the token every request has to present. `skip` is refused when there is no turn to
+skip, and there is deliberately no way to cover the screen or to type at the agent from
+outside. A runner that cannot create the socket simply runs without one.
+
 ## Tests
 
 ```sh
@@ -247,6 +416,15 @@ restoration on every exit path.
 
 **`hooks.py`** — FIFO creation and Claude Code hook wiring. Cleaning up FIFOs left behind by
 dead runners happens here too.
+
+**`control.py`** — the control socket: discovery, the token, and the transport. What the
+commands *mean* stays in `cli.py`.
+
+**`config.py`** — the stored defaults, and the precedence between them, the env knobs and a
+session's own values.
+
+**`top.py`** — the `--top` view. It owns nothing: it polls the socket and sends the same
+commands a person could type.
 
 The procedure for changing the code is in `CONTRIBUTING.md`.
 

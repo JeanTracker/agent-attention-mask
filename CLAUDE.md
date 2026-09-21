@@ -50,7 +50,7 @@ not cite anything in it as evidence.
 python3 tests/run_all.py
 ```
 
-8 phase suites. If you changed code, run this and report the result. If you need a real
+9 phase suites. If you changed code, run this and report the result. If you need a real
 agent's timing or hook payloads, build the observations first with `tests/tap_agent.py` /
 `tests/probe_hooks.py`.
 

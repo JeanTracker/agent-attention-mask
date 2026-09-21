@@ -163,8 +163,9 @@ def test_a_waiting_agent_does_not_go_stale():
 
     runner = cli.Runner.__new__(cli.Runner)
     runner.hooks = Fake()
+    runner.settings = cli.Settings.from_env()
     runner._hook_state = hooks_mod.WAITING
-    runner._hook_at = time.monotonic() - (cli.HOOK_STALL + 60)
+    runner._hook_at = time.monotonic() - (runner.settings.hook_stall + 60)
     check("오래된 waiting도 유효", runner._hooks_speaking(), "만료됨")
 
     runner._hook_state = hooks_mod.BUSY
@@ -459,6 +460,54 @@ def test_next_prompt_clears_the_skip():
     resumed = [t for t, chunk in res.timeline if is_rain(chunk) and t > 7.5]
     check("억제 중에는 덮이지 않음", not skipped, f"t={skipped[0] if skipped else None}")
     check("새 프롬프트가 오면 억제 해제", resumed, "다음 턴에도 덮이지 않음")
+
+
+def test_skip_holds_while_a_subagent_of_that_turn_keeps_working():
+    """`q` covers the whole turn, subagents included.
+
+    A turn the user skipped often has an `Agent` call in it, and the subagent
+    goes on firing events afterwards. Those are the same request the user just
+    said "not this turn" about, so none of them may put the rain back (D-038).
+    """
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "서브에이전트 띄워줘"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Agent"}],
+        [6.0, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash",
+                             "agent_id": "ad6f92b64daf7bd60",
+                             "agent_type": "general-purpose"}],
+        [7.0, "PostToolUse", {"prompt_id": "p1", "tool_name": "Bash",
+                              "agent_id": "ad6f92b64daf7bd60",
+                              "agent_type": "general-purpose"}],
+        [8.0, "SubagentStop", {"prompt_id": "p1", "agent_type": "general-purpose",
+                               "agent_id": "ad6f92b64daf7bd60"}],
+    ], total=16, timeout=22, feed=[(4.0, b"q")])
+    check("q 이전에 덮여 있었다 (전제)",
+          any(is_rain(chunk) for t, chunk in res.timeline if t < 4.0),
+          "덮이지 않아 이 케이스가 무의미하다")
+    after = [t for t, chunk in res.timeline if is_rain(chunk) and t > 5.5]
+    check("서브에이전트 이벤트가 억제를 깨지 않음",
+          not after, f"재진입 t={after[0] if after else None}")
+
+
+def test_injected_notification_does_not_clear_the_skip():
+    """A background task finishing is not the user asking for something.
+
+    The turn it opens is genuinely busy (D-035), but the user has already said
+    "not this turn" about the request that started that background work, so
+    the skip has to survive it. Only a prompt the *user* submitted releases it.
+    """
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "서브에이전트 띄워줘"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Agent"}],
+        [6.0, "UserPromptSubmit", {"prompt_id": "p2", "prompt": TASK_NOTIFICATION}],
+        [6.2, "PreToolUse", {"prompt_id": "p2", "tool_name": "Bash"}],
+    ], total=16, timeout=22, feed=[(4.0, b"q")])
+    check("q 이전에 덮여 있었다 (전제)",
+          any(is_rain(chunk) for t, chunk in res.timeline if t < 4.0),
+          "덮이지 않아 이 케이스가 무의미하다")
+    after = [t for t, chunk in res.timeline if is_rain(chunk) and t > 7.5]
+    check("주입된 알림이 억제를 풀지 않음",
+          not after, f"재진입 t={after[0] if after else None}")
 
 
 def test_skip_key_does_not_reach_the_agent():

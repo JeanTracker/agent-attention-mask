@@ -22,6 +22,7 @@ import errno
 import json
 import os
 import secrets
+import shlex
 import tempfile
 
 # What each event says about whether the agent needs the screen.
@@ -137,7 +138,11 @@ class HookChannel:
         """A Claude Code settings fragment pointing every event at the emitter."""
         hooks = {}
         for event in EVENT_MEANING:
-            command = f"{self.emitter} {self.path} {event} {self.token}"
+            # Quoted: the emitter and FIFO paths come from wherever the user
+            # cloned to, and a folder with a space in it would otherwise split
+            # into two arguments and the hook would silently never fire.
+            command = " ".join(shlex.quote(part) for part in
+                               (self.emitter, self.path, event, self.token))
             entry = {"hooks": [{"type": "command", "command": command}]}
             if event in _MATCHED:
                 entry["matcher"] = "*"

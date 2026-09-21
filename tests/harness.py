@@ -11,7 +11,9 @@ import select
 import signal
 import struct
 import fcntl
+import tempfile
 import termios
+import threading
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +29,13 @@ FAST_TIMING = {
     # longer; the cases that care about the real value set it themselves.
     "AMASK_IDLE_SILENCE": "0.6",
 }
+
+# Every runner started by the suite publishes its control socket here instead
+# of in the user's `~/.amask/run` (D-039). Sessions are keyed by pid, so one
+# directory for the whole suite is enough.
+RUN_DIR = os.path.join(tempfile.gettempdir(), "amask-test-run")
+os.makedirs(RUN_DIR, mode=0o700, exist_ok=True)
+FAST_TIMING["AMASK_RUN_DIR"] = RUN_DIR
 
 
 # A rain cell: a cursor move, one of the rain's four colours, and exactly one
@@ -52,12 +61,13 @@ def fixture(name, *args):
 class Result(tuple):
     """(output, exit_code), plus timing detail for the latency assertions."""
 
-    def __new__(cls, data, code, timeline, feeds):
+    def __new__(cls, data, code, timeline, feeds, acts=()):
         self = super().__new__(cls, (data, code))
         self.data = data
         self.code = code
         self.timeline = timeline  # [(elapsed_seconds, bytes), ...]
         self.feeds = feeds  # [(elapsed_seconds, bytes), ...]
+        self.acts = list(acts)  # [(elapsed_seconds, returned_value), ...]
         return self
 
     def first_time(self, needle):
@@ -68,10 +78,21 @@ class Result(tuple):
         return None
 
 
-def run_in_pty(args, feed=(), timeout=15.0, rows=24, cols=80, env=None, observe=False):
+def run_in_pty(args, feed=(), timeout=15.0, rows=24, cols=80, env=None, observe=False,
+               act=()):
     """Run `amask <args>` on a pty.
 
     feed: iterable of (delay_seconds, bytes) written to the runner's stdin.
+    act: iterable of (delay_seconds, fn); fn(pid) runs at that point and
+        whatever it returns lands in `Result.acts`. This is how the
+        control-socket cases talk to a running runner -- the socket is not
+        stdin, so `feed` cannot reach it.
+
+        Each one runs on its own thread, and that is not a detail: a covered
+        runner writes a full rain frame every 50ms, so a loop that stops
+        reading the pty while it waits for a reply fills the buffer and blocks
+        the runner inside its own write. Measured -- every request made while
+        the screen was covered timed out until this moved off the read loop.
     Returns a Result behaving as (output_bytes, exit_code).
     """
     pid, master = pty.fork()
@@ -87,10 +108,13 @@ def run_in_pty(args, feed=(), timeout=15.0, rows=24, cols=80, env=None, observe=
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
     pending = list(feed)
+    actions = list(act)
     started = time.monotonic()
     chunks = []
     timeline = []
     feeds = []
+    acts = []
+    threads = []
     while True:
         now = time.monotonic()
         if now - started > timeout:
@@ -101,7 +125,8 @@ def run_in_pty(args, feed=(), timeout=15.0, rows=24, cols=80, env=None, observe=
                 # exits): the elapsed window *is* the test, so hand back what
                 # was seen instead of treating the deadline as a failure.
                 os.close(master)
-                return Result(b"".join(chunks), None, timeline, feeds)
+                return Result(b"".join(chunks), None, timeline, feeds,
+                              _finish(acts, threads))
             blob = b"".join(chunks)
             raise TimeoutError(
                 f"timed out after {timeout}s; {len(blob)} bytes, tail={blob[-160:]!r}"
@@ -111,6 +136,22 @@ def run_in_pty(args, feed=(), timeout=15.0, rows=24, cols=80, env=None, observe=
             payload = pending.pop(0)[1]
             os.write(master, payload)
             feeds.append((time.monotonic() - started, payload))
+
+        while actions and now - started >= actions[0][0]:
+            fn = actions.pop(0)[1]
+            slot = len(acts)
+            acts.append(None)
+
+            def runner(fn=fn, slot=slot):
+                try:
+                    outcome = fn(pid)
+                except Exception as exc:  # the action's failure is the finding
+                    outcome = exc
+                acts[slot] = (time.monotonic() - started, outcome)
+
+            thread = threading.Thread(target=runner, daemon=True)
+            thread.start()
+            threads.append(thread)
 
         readable, _, _ = select.select([master], [], [], 0.05)
         if readable:
@@ -122,17 +163,25 @@ def run_in_pty(args, feed=(), timeout=15.0, rows=24, cols=80, env=None, observe=
                 break
             chunks.append(data)
             timeline.append((time.monotonic() - started, data))
-        elif not pending:
+        elif not pending and not actions and not any(t.is_alive() for t in threads):
             # Nothing to send and nothing to read: has the child finished?
             done, status = os.waitpid(pid, os.WNOHANG)
             if done:
                 _drain(master, chunks, timeline, started)
                 os.close(master)
-                return Result(b"".join(chunks), _code(status), timeline, feeds)
+                return Result(b"".join(chunks), _code(status), timeline, feeds,
+                  _finish(acts, threads))
 
     os.close(master)
     _, status = os.waitpid(pid, 0)
-    return Result(b"".join(chunks), _code(status), timeline, feeds)
+    return Result(b"".join(chunks), _code(status), timeline, feeds,
+                  _finish(acts, threads))
+
+
+def _finish(acts, threads):
+    for thread in threads:
+        thread.join(3.0)
+    return [item for item in acts if item is not None]
 
 
 def _drain(master, chunks, timeline, started):
