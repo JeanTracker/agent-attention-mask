@@ -265,13 +265,17 @@ refreshed twice a second:
 
 ```
  amask  세션 3개  (2개 선택)
-   PID      화면  상태                  덮기   폴더                프롬프트
-*  23875    덮임  작업                  4s     amask               기본 설정 기능 넣어줘
-   24110    열림  대기·건너뜀           20s    release-notes       릴리스 노트 초안 써줘
-*  24777    덮임  작업                  8s     amask               테스트 전부 돌려줘
+   PID    화면  상태           덮기  폴더                  프롬프트
+*  23875  덮임  작업           4s    amask                 기본 설정 기능 넣어줘
+   24110  열림  대기·건너뜀    20s   release-notes         릴리스 노트 초안 써줘
+*  24777  덮임  작업·유휴의심  8s    agent-attention-mask  테스트 전부 돌려줘
 기본설정 overlay_delay=8 -> 2개 세션에 적용
 space 선택  a 전체  enter 상세  d 기본  s 건너뜀  w 깨우기  +/- 덮기  [/] 유휴  r 갱신  q 종료
 ```
+
+Every column is as wide as what is actually in it: `상태` grows when a session has flags
+hung off it, `폴더` with the name of the directory, and the prompt takes what is left. A
+narrow window shrinks them back rather than cutting either off mid-word (D-046).
 
 `space` marks a session (`a` marks them all) and every command then applies to the marked
 ones: `s` skips their turn (the same thing as pressing `q` in each), `w` wakes them, `d`

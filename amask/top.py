@@ -50,6 +50,43 @@ STATE_NAMES = {"busy": "작업", "waiting": "대기"}
 # to the detail pane (D-044).
 COLUMNS = (" ", "PID", "화면", "상태", "덮기", "폴더", "프롬프트")
 
+# The padded columns, measured rather than fixed (D-046). 상태 grows with the
+# flags hung off it (`작업·건너뜀·유휴의심·훅없음` is 27 cells) and 폴더 with
+# whatever the directory is called; a fixed width cut off exactly the rows
+# that had something to say. The floor is what keeps a narrow window
+# readable, the ceiling what stops one long name from eating the prompt.
+MIN_WIDTH = (1, 5, 4, 8, 4, 8)
+MAX_WIDTH = (1, 9, 4, 30, 8, 30)
+
+# The prompt is why the row exists, so it is the one thing never squeezed
+# out: the measured columns give cells back until this much is left for it.
+PROMPT_FLOOR = 16
+
+
+def column_widths(cells, total):
+    """How wide each padded column is, given what is in it. Pure.
+
+    `cells` is the rows as they will be drawn, `total` the window. The last
+    column (the prompt) is not padded -- it takes whatever is left and is
+    clipped by the window, so it has no width here.
+    """
+    count = len(MIN_WIDTH)
+    widths = []
+    for index in range(count):
+        want = max([_width(COLUMNS[index])] +
+                   [_width(str(row[index])) for row in cells])
+        widths.append(max(MIN_WIDTH[index], min(MAX_WIDTH[index], want)))
+    gaps = 2 * count  # two spaces after every padded column
+    while sum(widths) + gaps + PROMPT_FLOOR > total:
+        # Take from whichever column is furthest above its floor, so a long
+        # folder name shrinks before a column that is already at the bone.
+        widest = max(range(count), key=lambda i: widths[i] - MIN_WIDTH[i])
+        if widths[widest] <= MIN_WIDTH[widest]:
+            break
+        widths[widest] -= 1
+    return tuple(widths)
+
+
 # Enter is three different numbers depending on where it came from: 10 under
 # curses' own newline translation, 13 from a terminal that does not translate,
 # KEY_ENTER from a numpad.
@@ -224,7 +261,7 @@ def detail_lines(info, status, problem=None, width=78):
     The row answers "which of these needs me?"; this answers "what is this
     one actually doing?" (D-043). So it carries the fields a row has no room
     for -- the agent's session id, where it is running, when it started, all
-    three timing values, the request in full rather than folded to one line.
+    three timing values, the prompt in full rather than folded to one line.
 
     Pure, and it takes the width rather than a window, so the suite can read
     the pane without a terminal.
@@ -443,7 +480,20 @@ def _draw(screen, rows, selected, marked, message):
         title += f"  {marker}"
     _put(screen, 0, _pad(title, width - 1), curses.A_REVERSE)
 
-    widths = (1, 7, 4, 20, 5, 18)
+    # Every visible row is laid out before any of it is drawn: the columns
+    # are as wide as what is in them, and that cannot be known row by row.
+    drawn = []
+    for index, (info, status, problem) in enumerate(rows[start:end], start):
+        mark = "*" if info.get("pid") in marked else " "
+        if status is None:
+            cells = (mark, str(info.get("pid", "?")), "-", problem or "?",
+                     "-", _folder(info.get("cwd")),
+                     " ".join(info.get("argv") or []))
+        else:
+            cells = (mark,) + describe(status)
+        drawn.append((index, cells))
+    widths = column_widths([cells for _, cells in drawn], width - 1)
+
     header = "  ".join(_pad(name, size) for name, size in zip(COLUMNS, widths))
     _put(screen, 1, header + "  " + COLUMNS[-1], curses.A_BOLD)
 
@@ -452,15 +502,8 @@ def _draw(screen, rows, selected, marked, message):
         _put(screen, 4, "  amask가 돌고 있는데도 비어 있다면, 그 러너가 제어 소켓보다")
         _put(screen, 5, "  오래된 것이다 -- 다시 띄우면 잡힌다.")
 
-    for index, (info, status, problem) in enumerate(rows[start:end], start):
+    for index, cells in drawn:
         line = 2 + index - start
-        mark = "*" if info.get("pid") in marked else " "
-        if status is None:
-            cells = (mark, str(info.get("pid", "?")), "-", problem or "?",
-                     "-", _folder(info.get("cwd")),
-                     " ".join(info.get("argv") or []))
-        else:
-            cells = (mark,) + describe(status)
         text = "  ".join(_pad(cell, size) for cell, size in zip(cells, widths))
         text += "  " + cells[-1]
         attr = curses.A_REVERSE if index == selected else curses.A_NORMAL

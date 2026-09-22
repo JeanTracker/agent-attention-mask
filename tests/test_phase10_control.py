@@ -746,6 +746,46 @@ def test_the_short_window_frames_show_what_is_hidden():
     check("목록 스크롤에도 예외가 없다", "Traceback" not in bottom, bottom)
 
 
+def test_the_columns_are_as_wide_as_what_is_in_them():
+    """상태와 폴더가 고정 폭에 잘리던 것 (D-046)."""
+    from amask import top
+
+    loud = (" ", "23875", "덮임", "작업·건너뜀·유휴의심·훅없음", "4s",
+            "agent-attention-mask", "레인 색을 고쳐줘")
+    quiet = (" ", "24110", "열림", "대기", "20s", "amask", "노트 써줘")
+
+    widths = top.column_widths([loud, quiet], 140)
+    check("깃발이 다 붙은 상태도 안 잘린다",
+          widths[3] >= top._width(loud[3]), str(widths))
+    check("긴 폴더 이름도 안 잘린다",
+          widths[5] >= top._width(loud[5]), str(widths))
+    check("헤더보다 좁아지지 않는다", widths[3] >= top._width("상태")
+          and widths[5] >= top._width("폴더"), str(widths))
+
+    narrow = top.column_widths([quiet], 140)
+    check("짧은 내용에는 자리를 덜 준다", narrow[3] < widths[3], str(narrow))
+
+    squeezed = top.column_widths([loud, quiet], 60)
+    check("좁은 창에서는 줄어든다", sum(squeezed) < sum(widths), str(squeezed))
+    check("좁아도 프롬프트 자리는 남긴다",
+          sum(squeezed) + 2 * len(squeezed) + top.PROMPT_FLOOR <= 60,
+          str(squeezed))
+    tiny = top.column_widths([loud], 10)
+    check("바닥 밑으로는 안 내려간다", tiny == top.MIN_WIDTH, str(tiny))
+
+
+def test_a_long_state_and_folder_survive_the_frame():
+    sample = [{"info": {"pid": 23875},
+               "status": dict(TOP_SAMPLE[0]["status"], skip_turn=True,
+                              idle_suspected=True, hooks=False,
+                              cwd="/home/me/work/agent-attention-mask")}]
+    screen = _render(sample, cols=140)
+    check("상태가 통째로 보인다", "유휴의심" in screen and "훅없음" in screen, screen)
+    check("폴더 이름이 통째로 보인다", "agent-attention-mask" in screen, screen)
+    check("프롬프트도 같이 보인다", "레인 색을 고쳐줘" in screen, screen)
+    check("예외가 새지 않았다", "Traceback" not in screen, screen)
+
+
 def test_an_empty_list_explains_the_likely_reason():
     screen = _render([])
     check("없다고 말한다", "세션이 없다" in screen, screen)
