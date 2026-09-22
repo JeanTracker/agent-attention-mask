@@ -21,8 +21,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # One interpreter, both kernels (D-053). The suite drives real ptys
+        # for minutes a job, and the axis that has ever disagreed with itself
+        # is the OS, not the Python version -- pty and termios behaviour is
+        # the kernel's. README still says 3.11+; that claim is now checked by
+        # hand rather than on every push.
         os: [ubuntu-latest, macos-latest]
-        python: ["3.11", "3.12", "3.13"]
+        python: ["3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
