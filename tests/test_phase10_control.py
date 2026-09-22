@@ -510,10 +510,10 @@ def test_a_row_says_what_the_session_is_doing():
         "settings": {"idle_silence": 1.5, "hook_stall": 120.0, "overlay_delay": 4.0},
     })
     check("pid", cells[0] == "42", str(cells))
-    check("덮인 상태를 한 눈에", cells[1] == "덮임", str(cells))
-    check("상태는 한국어로 적는다", cells[2].startswith("작업"), str(cells))
+    check("덮인 상태를 한 눈에", cells[1] == "covered", str(cells))
+    check("상태는 한국어로 적는다", cells[2].startswith("working"), str(cells))
     check("프로토콜 값이 그대로 나오지 않는다", "busy" not in cells[2], str(cells))
-    check("억제 중임을 표시", "건너뜀" in cells[2], str(cells))
+    check("억제 중임을 표시", "skip" in cells[2], str(cells))
     check("그 세션의 덮기 지연", cells[3] == "4s", str(cells))
     check("폴더는 마지막 한 칸", cells[4] == "agent-attention-mask", str(cells))
     check("프롬프트는 한 줄로 접힌다", cells[5] == "레인 색을 고쳐줘", str(cells))
@@ -521,8 +521,8 @@ def test_a_row_says_what_the_session_is_doing():
     waiting = top.describe({"pid": 7, "covered": False, "busy": False,
                             "hooks": False, "hook_state": "waiting",
                             "hidden_bytes": 0, "prompt": "", "settings": {}})
-    check("대기도 한국어로", waiting[2].startswith("대기"), str(waiting))
-    check("훅이 없으면 그렇게 적는다", "훅없음" in waiting[2], str(waiting))
+    check("대기도 한국어로", waiting[2].startswith("waiting"), str(waiting))
+    check("훅이 없으면 그렇게 적는다", "no hooks" in waiting[2], str(waiting))
     check("폴더를 모르면 -", waiting[4] == "-", str(waiting))
     check("프롬프트가 없으면 -", waiting[5] == "-", str(waiting))
 
@@ -578,20 +578,20 @@ TOP_SAMPLE = [
                 "settings": {"idle_silence": 1.5, "hook_stall": 120.0,
                              "overlay_delay": 4.0}}},
     {"info": {"pid": 24999, "argv": ["claude", "--resume"]},
-     "problem": "닿지 않음: TimeoutError"},
+     "problem": "unreachable: TimeoutError"},
 ]
 
 
 def test_the_frame_shows_every_session_and_the_keys():
-    screen = _render(TOP_SAMPLE, selected=0, message="적용: overlay_delay=8")
-    check("세션 수가 제목에 있다", "세션 2개" in screen, screen[:200])
-    check("헤더가 있다", "PID" in screen and "프롬프트" in screen, screen[:200])
-    check("돌고 있는 세션이 보인다", "23875" in screen and "덮임" in screen, screen)
+    screen = _render(TOP_SAMPLE, selected=0, message="applied: overlay_delay=8")
+    check("세션 수가 제목에 있다", "2 sessions" in screen, screen[:200])
+    check("헤더가 있다", "PID" in screen and "Prompt" in screen, screen[:200])
+    check("돌고 있는 세션이 보인다", "23875" in screen and "covered" in screen, screen)
     check("사용자 요청이 보인다", "레인 색을 고쳐줘" in screen, screen)
     check("닿지 않는 세션은 그렇게 그린다",
-          "닿지 않음" in screen and "claude --resume" in screen, screen)
-    check("마지막 응답이 보인다", "적용: overlay_delay=8" in screen, screen)
-    check("키 안내가 마지막 줄에 있다", "q 종료" in screen, screen)
+          "unreachable" in screen and "claude --resume" in screen, screen)
+    check("마지막 응답이 보인다", "applied: overlay_delay=8" in screen, screen)
+    check("키 안내가 마지막 줄에 있다", "q quit" in screen, screen)
     check("예외가 새지 않았다", "Traceback" not in screen, screen)
 
 
@@ -647,37 +647,38 @@ def test_the_detail_pane_says_what_the_row_had_no_room_for():
     }
     text = "\n".join(top.detail_lines({"pid": 42, "started": time.time() - 90},
                                       status, width=60))
-    check("상태를 한국어로 적는다", "작업" in text and "busy" not in text, text)
+    check("상태를 프로토콜 값이 아니라 말로 적는다",
+          "working" in text and "busy" not in text, text)
     for wanted in ("sess-abc", "claude --resume", "/home/me/work", "43869",
                    "Opus 5", "12.3k", "1.5s", "120s", "4s", "54.2s"):
         check(f"상세에 {wanted}", wanted in text, text)
-    check("언제 시작했는지 나온다", "분 전" in text, text)
-    check("건너뛰기 상태를 설명한다", "덮지 않는다" in text, text)
-    check("유휴 의심을 설명한다", "출력이 끊겼다" in text, text)
+    check("언제 시작했는지 나온다", "m ago" in text, text)
+    check("건너뛰기 상태를 설명한다", "will not be covered" in text, text)
+    check("유휴 의심을 설명한다", "the output stopped" in text, text)
     check("요청이 줄바꿈까지 살아 있다",
           "레인 색을 고쳐줘" in text and "테스트도 전부" in text, text)
     for line in top.detail_lines({"pid": 42}, status, width=40):
         check("어느 줄도 요청한 폭을 넘지 않는다", top._width(line) <= 40, line)
 
     gone = "\n".join(top.detail_lines({"pid": 7, "argv": ["claude"]}, None,
-                                      "닿지 않음: TimeoutError"))
+                                      "unreachable: TimeoutError"))
     check("닿지 않는 세션도 이유를 적는다", "TimeoutError" in gone, gone)
-    check("닿지 않으면 그렇게 설명한다", "응답하지 않는다" in gone, gone)
+    check("닿지 않으면 그렇게 설명한다", "not answering" in gone, gone)
 
 
 def test_the_detail_frame_draws_in_a_real_terminal():
     screen = _render(TOP_SAMPLE, detail=23875, rows_high=24, cols=100,
-                     message="적용: overlay_delay=8")
-    check("제목에 세션이 있다", "세션 23875" in screen, screen[:200])
+                     message="applied: overlay_delay=8")
+    check("제목에 세션이 있다", "session 23875" in screen, screen[:200])
     check("요청 전문이 보인다", "레인 색을 고쳐줘" in screen, screen)
-    check("설정이 보인다", "덮기 지연" in screen and "유휴 임계" in screen, screen)
-    check("마지막 응답이 보인다", "적용: overlay_delay=8" in screen, screen)
-    check("상세 키 안내가 있다", "목록" in screen and "q 종료" in screen, screen)
+    check("설정이 보인다", "Cover delay" in screen and "Idle silence" in screen, screen)
+    check("마지막 응답이 보인다", "applied: overlay_delay=8" in screen, screen)
+    check("상세 키 안내가 있다", "list" in screen and "q quit" in screen, screen)
     check("예외가 새지 않았다", "Traceback" not in screen, screen)
 
     unreachable = _render(TOP_SAMPLE, detail=24999, rows_high=24, cols=100)
     check("닿지 않는 세션의 상세도 그려진다",
-          "닿지 않음" in unreachable and "24999" in unreachable, unreachable)
+          "unreachable" in unreachable and "24999" in unreachable, unreachable)
 
     narrow = _render(TOP_SAMPLE, detail=23875, cols=24, rows_high=6)
     check("좁은 창에서도 상세가 그려진다", "23875" in narrow, narrow)
@@ -715,7 +716,7 @@ def test_a_short_window_scrolls_instead_of_cutting_off():
     check("상세에서 space는 한 쪽 아래",
           top.detail_action_for(ord(" ")) == ("scroll-page", 1))
     check("상세에서 G는 끝으로", top.detail_action_for(ord("G")) == ("scroll-edge", 1))
-    check("상세 도움줄에 스크롤이 적혀 있다", "스크롤" in top.DETAIL_HELP,
+    check("상세 도움줄에 스크롤이 적혀 있다", "scroll" in top.DETAIL_HELP,
           top.DETAIL_HELP)
     check("상세 도움줄이 95칸을 넘지 않는다", top._width(top.DETAIL_HELP) <= 95,
           str(top._width(top.DETAIL_HELP)))
@@ -725,12 +726,12 @@ def test_the_short_window_frames_show_what_is_hidden():
     short = _render(TOP_SAMPLE, detail=23875, rows_high=8, cols=90)
     check("짧은 창에서는 첫 줄부터 보인다", "PID" in short and "23875" in short, short)
     check("아래에 더 있다고 알려준다", "↓" in short, short)
-    check("키 안내는 그대로 있다", "목록" in short, short)
+    check("키 안내는 그대로 있다", "list" in short, short)
 
     scrolled = _render(TOP_SAMPLE, detail=23875, rows_high=8, cols=90, offset=99)
     check("끝까지 내리면 요청이 보인다", "레인 색을 고쳐줘" in scrolled, scrolled)
     check("위에 더 있다고 알려준다", "↑" in scrolled, scrolled)
-    check("내용을 벗어나 비지 않는다", "훅 정체" in scrolled, scrolled)
+    check("내용을 벗어나 비지 않는다", "Hook stall" in scrolled, scrolled)
     check("예외가 새지 않았다", "Traceback" not in scrolled, scrolled)
 
     many = [{"info": {"pid": 1000 + i},
@@ -774,26 +775,26 @@ def test_the_state_name_says_it_in_one_place():
     """행과 상세가 같은 표를 쓰고 폴백만 다르다 (D-044)."""
     from amask import top
 
-    check("busy", top._state_name({"hook_state": "busy"}) == "작업")
-    check("waiting", top._state_name({"hook_state": "waiting"}) == "대기")
+    check("busy", top._state_name({"hook_state": "busy"}) == "working")
+    check("waiting", top._state_name({"hook_state": "waiting"}) == "waiting")
     check("모르는 값은 그대로",
           top._state_name({"hook_state": "compacting"}) == "compacting")
     check("상태가 없으면 행은 busy로 넘겨짚는다",
-          top._state_name({"busy": True}) == "작업"
-          and top._state_name({"busy": False}) == "대기")
+          top._state_name({"busy": True}) == "working"
+          and top._state_name({"busy": False}) == "waiting")
     check("폴백을 주면 그것을 쓴다",
-          top._state_name({"busy": True}, "알 수 없음") == "알 수 없음")
+          top._state_name({"busy": True}, "unknown") == "unknown")
     check("폴백이 있어도 아는 값이 우선",
-          top._state_name({"hook_state": "busy"}, "알 수 없음") == "작업")
+          top._state_name({"hook_state": "busy"}, "unknown") == "working")
 
 
 def test_the_columns_are_as_wide_as_what_is_in_them():
     """상태와 폴더가 고정 폭에 잘리던 것 (D-046)."""
     from amask import top
 
-    loud = (" ", "23875", "덮임", "작업·건너뜀·유휴의심·훅없음", "4s",
-            "agent-attention-mask", "레인 색을 고쳐줘")
-    quiet = (" ", "24110", "열림", "대기", "20s", "amask", "노트 써줘")
+    loud = (" ", "23875", "covered", "working·skip·idle?·no hooks", "4s",
+            "agent-attention-mask", "fix the rain colour")
+    quiet = (" ", "24110", "open", "waiting", "20s", "amask", "write the notes")
 
     widths = top.column_widths([loud, quiet], 140)
     check("깃발이 다 붙은 상태도 안 잘린다",
@@ -806,10 +807,10 @@ def test_the_columns_are_as_wide_as_what_is_in_them():
     narrow = top.column_widths([quiet], 140)
     check("짧은 내용에는 자리를 덜 준다", narrow[3] < widths[3], str(narrow))
 
-    squeezed = top.column_widths([loud, quiet], 60)
+    squeezed = top.column_widths([loud, quiet], 80)
     check("좁은 창에서는 줄어든다", sum(squeezed) < sum(widths), str(squeezed))
     check("좁아도 프롬프트 자리는 남긴다",
-          sum(squeezed) + 2 * len(squeezed) + top.PROMPT_FLOOR <= 60,
+          sum(squeezed) + 2 * len(squeezed) + top.PROMPT_FLOOR <= 80,
           str(squeezed))
     tiny = top.column_widths([loud], 10)
     check("바닥 밑으로는 안 내려간다", tiny == top.MIN_WIDTH, str(tiny))
@@ -821,7 +822,7 @@ def test_a_long_state_and_folder_survive_the_frame():
                               idle_suspected=True, hooks=False,
                               cwd="/home/me/work/agent-attention-mask")}]
     screen = _render(sample, cols=140)
-    check("상태가 통째로 보인다", "유휴의심" in screen and "훅없음" in screen, screen)
+    check("상태가 통째로 보인다", "idle?" in screen and "no hooks" in screen, screen)
     check("폴더 이름이 통째로 보인다", "agent-attention-mask" in screen, screen)
     check("프롬프트도 같이 보인다", "레인 색을 고쳐줘" in screen, screen)
     check("예외가 새지 않았다", "Traceback" not in screen, screen)
@@ -829,8 +830,8 @@ def test_a_long_state_and_folder_survive_the_frame():
 
 def test_an_empty_list_explains_the_likely_reason():
     screen = _render([])
-    check("없다고 말한다", "세션이 없다" in screen, screen)
-    check("오래된 러너일 수 있다고 알려준다", "오래된" in screen, screen)
+    check("없다고 말한다", "No amask session is running" in screen, screen)
+    check("오래된 러너일 수 있다고 알려준다", "predates the control socket" in screen, screen)
 
 
 # -- the stored defaults, and pushing them into running sessions (D-041) -----
@@ -942,16 +943,16 @@ def test_the_config_subcommand_shows_and_changes():
                                   capture_output=True, env=dict(os.environ))
 
         shown = run().stdout.decode()
-        check("아무 것도 저장되지 않았음을 말한다", "(없음)" in shown, shown)
-        check("새 세션이 시작할 값을 보여준다", "새 세션이 시작할 값" in shown, shown)
+        check("아무 것도 저장되지 않았음을 말한다", "(none)" in shown, shown)
+        check("새 세션이 시작할 값을 보여준다", "what a new session starts with" in shown, shown)
 
         out = run("overlay_delay=8")
         check("지정이 성공한다", out.returncode == 0, out.stderr.decode())
-        check("새 세션부터라고 알려준다", "새 세션부터" in out.stderr.decode(),
+        check("새 세션부터라고 알려준다", "New sessions start with this" in out.stderr.decode(),
               out.stderr.decode())
         check("파일에 반영된다", config.load() == {"overlay_delay": 8.0},
               str(config.load()))
-        check("보기에 저장값이 나온다", "저장 8" in run().stdout.decode(),
+        check("보기에 저장값이 나온다", "stored 8" in run().stdout.decode(),
               run().stdout.decode())
 
         bad = run("overlay_delay=-1")
@@ -1008,8 +1009,8 @@ def test_the_defaults_the_view_pushes_are_the_stored_ones():
 
 def test_marked_rows_are_drawn_as_marked():
     screen = _render(TOP_SAMPLE, selected=1, marked=[23875],
-                     message="기본설정 overlay_delay=8 -> 1개 세션에 적용")
-    check("선택 수가 제목에 나온다", "1개 선택" in screen, screen[:200])
+                     message="defaults overlay_delay=8 -> applied to 1 sessions")
+    check("선택 수가 제목에 나온다", "(1 marked)" in screen, screen[:200])
     marked_line = [line for line in screen.split("\n") if "23875" in line]
     check("표시된 행에 * 가 붙는다",
           marked_line and marked_line[0].lstrip().startswith("*"),
@@ -1017,7 +1018,7 @@ def test_marked_rows_are_drawn_as_marked():
     other = [line for line in screen.split("\n") if "24999" in line]
     check("표시되지 않은 행에는 없다",
           other and not other[0].lstrip().startswith("*"), str(other))
-    check("적용 결과가 보인다", "1개 세션에 적용" in screen, screen)
+    check("적용 결과가 보인다", "applied to 1 sessions" in screen, screen)
 
 
 def test_defaults_reach_two_running_sessions_at_once():

@@ -31,32 +31,32 @@ REFRESH = 0.5  # seconds between polls; the panel's own clock is 20fps
 STEP = {"overlay_delay": 1.0, "idle_silence": 0.1}
 
 # One line, and it has to fit: measured at 95 cells so a 96-column terminal
-# still shows the last key. Longer labels pushed `q 종료` off the screen.
-HELP = ("space 선택  a 전체  enter 상세  d 기본  "
-        "s 건너뜀  w 깨우기  +/- 덮기  [/] 유휴  r 갱신  q 종료")
+# still shows the last key. Longer labels pushed `q quit` off the screen.
+HELP = ("space mark  a all  enter detail  d default  "
+        "s skip  w wake  +/- cover  [/] idle  r poll  q quit")
 
 # The detail pane's own line. It has a whole screen, but the same 95-cell
 # budget applies -- a 96-column terminal must still show the last key.
-DETAIL_HELP = ("↑↓ 스크롤  esc/enter 목록  s 건너뜀  w 깨우기  "
-               "+/- 덮기  [/] 유휴  d 기본  r 갱신  q 종료")
+DETAIL_HELP = ("↑↓ scroll  esc/enter list  s skip  w wake  "
+               "+/- cover  [/] idle  d default  r poll  q quit")
 
 # What the runner reports in its own words, so a Korean screen does not show
 # the protocol's `busy`/`waiting` (D-044).
-STATE_NAMES = {"busy": "작업", "waiting": "대기"}
+STATE_NAMES = {"busy": "working", "waiting": "waiting"}
 
 # The row answers "which of these needs me?", so it carries what tells two
 # sessions apart -- where it is running and what it was asked. The numbers a
 # glance cannot use (how long it has been working, how much is hidden) moved
 # to the detail pane (D-044).
-COLUMNS = (" ", "PID", "화면", "상태", "덮기", "폴더", "프롬프트")
+COLUMNS = (" ", "PID", "Screen", "State", "Cover", "Folder", "Prompt")
 
-# The padded columns, measured rather than fixed (D-046). 상태 grows with the
-# flags hung off it (`작업·건너뜀·유휴의심·훅없음` is 27 cells) and 폴더 with
+# The padded columns, measured rather than fixed (D-046). State grows with
+# the flags hung off it (`working·skip·idle?·no hooks`) and Folder with
 # whatever the directory is called; a fixed width cut off exactly the rows
 # that had something to say. The floor is what keeps a narrow window
 # readable, the ceiling what stops one long name from eating the prompt.
-MIN_WIDTH = (1, 5, 4, 8, 4, 8)
-MAX_WIDTH = (1, 9, 4, 30, 8, 30)
+MIN_WIDTH = (1, 5, 6, 8, 5, 8)
+MAX_WIDTH = (1, 9, 8, 30, 8, 30)
 
 # The prompt is why the row exists, so it is the one thing never squeezed
 # out: the measured columns give cells back until this much is left for it.
@@ -217,17 +217,17 @@ def describe(status):
     state = _state_name(status)
     marks = []
     if status.get("skip_turn"):
-        marks.append("건너뜀")
+        marks.append("skip")
     if status.get("idle_suspected"):
-        marks.append("유휴의심")
+        marks.append("idle?")
     if not status.get("hooks"):
-        marks.append("훅없음")
+        marks.append("no hooks")
     if marks:
         state += "·" + "·".join(marks)
     settings = status.get("settings") or {}
     return (
         str(status.get("pid", "?")),
-        "덮임" if status.get("covered") else "열림",
+        "covered" if status.get("covered") else "open",
         state,
         f"{settings.get('overlay_delay', 0):g}s",
         _folder(status.get("cwd")),
@@ -248,7 +248,7 @@ def _state_name(status, unknown=None):
         return STATE_NAMES.get(raw, str(raw))
     if unknown is not None:
         return unknown
-    return "작업" if status.get("busy") else "대기"
+    return "working" if status.get("busy") else "waiting"
 
 
 def _folder(cwd):
@@ -285,47 +285,49 @@ def detail_lines(info, status, problem=None, width=78):
     pid = info.get("pid") or (status or {}).get("pid") or "?"
     field("PID", str(pid))
     argv = (status or {}).get("argv") or info.get("argv") or []
-    field("명령", " ".join(str(part) for part in argv) or "-")
+    field("Command", " ".join(str(part) for part in argv) or "-")
     if status is None:
         out.append("")
-        field("상태", problem or "닿지 않음")
+        field("State", problem or "unreachable")
         out.append("")
-        out.append("이 세션은 응답하지 않는다. 이미 끝났다면 다음 갱신에서 목록에서 빠진다.")
+        out.append("This session is not answering. If it has already exited "
+                   "it drops off the list on the next refresh.")
         return out
 
-    field("세션 id", str(status.get("session_id") or "-"))
-    field("폴더", str(status.get("cwd") or info.get("cwd") or "-"))
-    field("시작", _started(info.get("started")))
+    field("Session id", str(status.get("session_id") or "-"))
+    field("Folder", str(status.get("cwd") or info.get("cwd") or "-"))
+    field("Started", _started(info.get("started")))
     out.append("")
 
-    field("화면", "덮임 (레인이 올라가 있다)" if status.get("covered")
-           else "열림 (에이전트 화면이 보인다)")
-    field("상태", _state_name(status, "알 수 없음" if status.get("hooks")
-                              else "훅 없음 -- 시간 추정으로 판단 중"))
-    field("작업 시간", f"{status.get('busy_seconds', 0.0):.1f}s"
-          if status.get("busy") else "작업 중이 아니다")
+    field("Screen", "covered (the rain is up)" if status.get("covered")
+          else "open (the agent's screen is visible)")
+    field("State", _state_name(status, "unknown" if status.get("hooks")
+                               else "no hooks -- judging by timing"))
+    field("Working", f"{status.get('busy_seconds', 0.0):.1f}s"
+          if status.get("busy") else "not working")
     notes = []
     if status.get("skip_turn"):
-        notes.append("이번 턴은 덮지 않는다 (q/skip)")
+        notes.append("this turn will not be covered (q/skip)")
     if status.get("idle_suspected"):
-        notes.append("훅은 작업 중이라는데 출력이 끊겼다")
+        notes.append("hooks say working, but the output stopped")
     if not status.get("hooks"):
-        notes.append("훅 채널이 없다")
-    field("특이사항", " / ".join(notes) or "없음")
+        notes.append("no hook channel")
+    field("Notes", " / ".join(notes) or "none")
     if status.get("model"):
-        field("모델", str(status["model"]))
+        field("Model", str(status["model"]))
     if status.get("tokens"):
-        field("토큰", str(status["tokens"]))
-    field("숨긴 출력", f"{_bytes(status.get('hidden_bytes') or 0)}"
-          f" ({status.get('hidden_bytes') or 0}B, 덮개가 걷히면 그대로 나온다)")
+        field("Tokens", str(status["tokens"]))
+    field("Hidden", f"{_bytes(status.get('hidden_bytes') or 0)}"
+          f" ({status.get('hidden_bytes') or 0}B, all of it comes back"
+          f" when the cover lifts)")
     out.append("")
 
     settings = status.get("settings") or {}
-    field("덮기 지연", f"{settings.get('overlay_delay', 0):g}s")
-    field("유휴 임계", f"{settings.get('idle_silence', 0):g}s")
-    field("훅 정체", f"{settings.get('hook_stall', 0):g}s")
+    field("Cover delay", f"{settings.get('overlay_delay', 0):g}s")
+    field("Idle silence", f"{settings.get('idle_silence', 0):g}s")
+    field("Hook stall", f"{settings.get('hook_stall', 0):g}s")
     out.append("")
-    field("프롬프트", str(status.get("prompt") or "-"))
+    field("Prompt", str(status.get("prompt") or "-"))
     return out
 
 
@@ -339,10 +341,10 @@ def _started(when):
         return "-"
     ago = max(0.0, time.time() - when)
     if ago < 60:
-        return f"{stamp} ({ago:.0f}초 전)"
+        return f"{stamp} ({ago:.0f}s ago)"
     if ago < 3600:
-        return f"{stamp} ({ago / 60:.0f}분 전)"
-    return f"{stamp} ({ago / 3600:.1f}시간 전)"
+        return f"{stamp} ({ago / 60:.0f}m ago)"
+    return f"{stamp} ({ago / 3600:.1f}h ago)"
 
 
 def _bytes(count):
@@ -467,7 +469,7 @@ def _poll():
         try:
             reply = control.request(info, {"cmd": "status"}, timeout=0.4)
         except (OSError, ValueError) as exc:
-            rows.append((info, None, f"닿지 않음: {type(exc).__name__}"))
+            rows.append((info, None, f"unreachable: {type(exc).__name__}"))
             continue
         if reply.get("ok"):
             rows.append((info, reply["status"], None))
@@ -480,23 +482,23 @@ def _send(info, payload):
     try:
         reply = control.request(info, payload, timeout=0.6)
     except (OSError, ValueError) as exc:
-        return f"실패: {exc}"
+        return f"failed: {exc}"
     if reply.get("ok"):
         if "settings" in reply:
             values = reply["settings"]
-            return ("적용: " +
+            return ("applied: " +
                     " ".join(f"{k}={v:g}" for k, v in sorted(values.items())))
-        return "보냄"
-    return f"거부: {reply.get('reason')}"
+        return "sent"
+    return f"refused: {reply.get('reason')}"
 
 
 def _draw(screen, rows, selected, marked, message):
     screen.erase()
     height, width = screen.getmaxyx()
     start, end = visible_span(len(rows), selected, body_capacity(height))
-    title = f" amask  세션 {len(rows)}개"
+    title = f" amask  {len(rows)} sessions"
     if marked:
-        title += f"  ({len(marked)}개 선택)"
+        title += f"  ({len(marked)} marked)"
     marker = more_marker(start, end, len(rows))
     if marker:
         title += f"  {marker}"
@@ -520,9 +522,9 @@ def _draw(screen, rows, selected, marked, message):
     _put(screen, 1, header + "  " + COLUMNS[-1], curses.A_BOLD)
 
     if not rows:
-        _put(screen, 3, "  실행 중인 amask 세션이 없다.")
-        _put(screen, 4, "  amask가 돌고 있는데도 비어 있다면, 그 러너가 제어 소켓보다")
-        _put(screen, 5, "  오래된 것이다 -- 다시 띄우면 잡힌다.")
+        _put(screen, 3, "  No amask session is running.")
+        _put(screen, 4, "  If one is running and this is still empty, that runner")
+        _put(screen, 5, "  predates the control socket -- restart it to pick it up.")
 
     for index, cells in drawn:
         line = 2 + index - start
@@ -548,16 +550,16 @@ def _draw_detail(screen, row, message, offset=0):
     height, width = screen.getmaxyx()
     info, status, problem = row
     pid = info.get("pid") or (status or {}).get("pid") or "?"
-    state = "덮임" if (status or {}).get("covered") else "열림"
+    state = "covered" if (status or {}).get("covered") else "open"
     if status is None:
-        state = "닿지 않음"
+        state = "unreachable"
 
     lines = detail_lines(info, status, problem, width=max(20, width - 3))
     capacity = body_capacity(height)
     offset = clamp_offset(len(lines), capacity, offset)
     shown = lines[offset:offset + capacity]
 
-    title = f" amask  세션 {pid}  [{state}]"
+    title = f" amask  session {pid}  [{state}]"
     marker = more_marker(offset, offset + len(shown), len(lines))
     if marker:
         title += f"  {marker}"
@@ -601,7 +603,7 @@ def _loop(screen):
             if row is None:
                 # The ordinary case, not an error: fall back to the list
                 # rather than keep drawing a frame that stopped being true.
-                message = f"세션 {viewing}이(가) 끝났다"
+                message = f"session {viewing} ended"
                 viewing = None
             else:
                 offset = _draw_detail(screen, row, message, offset)
@@ -671,7 +673,7 @@ def _apply(chosen, kind, argument):
         name, delta = argument
         current = ((status or {}).get("settings") or {}).get(name)
         if current is None:
-            replies.append("설정을 읽지 못했다")
+            replies.append("could not read its settings")
         else:
             replies.append(_send(info, {
                 "cmd": "set",
@@ -691,16 +693,16 @@ def _apply_defaults(chosen):
     replies = [_send(info, {"cmd": "set", "settings": values})
                for info, _, _ in chosen]
     shown = " ".join(f"{k}={v:g}" for k, v in sorted(values.items()))
-    return f"기본설정 {shown} -> " + _summarise(chosen, replies)
+    return f"defaults {shown} -> " + _summarise(chosen, replies)
 
 
 def _summarise(chosen, replies):
     if not chosen:
-        return "대상이 없다"
-    bad = [reply for reply in replies if not reply.startswith(("보냄", "적용"))]
+        return "no target"
+    bad = [reply for reply in replies if not reply.startswith(("sent", "applied"))]
     if not bad:
-        return f"{len(chosen)}개 세션에 적용"
-    return f"{len(chosen) - len(bad)}/{len(chosen)}개 적용 -- {bad[0]}"
+        return f"applied to {len(chosen)} sessions"
+    return f"{len(chosen) - len(bad)}/{len(chosen)} applied -- {bad[0]}"
 
 
 def main():

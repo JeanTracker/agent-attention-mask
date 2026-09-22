@@ -100,7 +100,7 @@ def save(values):
 
 
 def merge(shipped):
-    """The stored defaults over the shipped ones: what "기본 설정" means.
+    """The stored defaults over the shipped ones: what `--config` shows.
 
     `shipped` is a dict of the code's own values. This is what `--top` pushes
     into a running session, and what a new session starts from before its env

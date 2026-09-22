@@ -50,12 +50,13 @@ from .inputline import InputLine
 from .rain import Rain
 from .term import TerminalController
 
-USAGE = """사용법: amask <에이전트 명령> [인자...]
-        amask --top                    실행 중인 세션을 한 화면에서 보고 조작
-        amask --ls                     실행 중인 세션 목록
-        amask --config [키=값...]      기본 설정 보기/지정 (새 세션부터 적용)
-        amask --ctl <pid|last> <명령> [키=값...]
-                                       status | get | set | skip | wake"""
+USAGE = """usage: amask <agent command> [args...]
+       amask --top                     watch and steer every session on one screen
+       amask --ls                      list the running sessions
+       amask --config [key=value...]   show or set the stored defaults (new sessions)
+       amask --ctl <pid|last> <command> [key=value...]
+                                       status | get | set | skip | wake
+       amask --version                 print the version"""
 
 # select() timeout: the animation tick, and how fast SIGWINCH/SIGCHLD flags are
 # noticed. 20fps is smooth enough and leaves SC-002's 0.2s budget untouched.
@@ -318,6 +319,13 @@ def main(argv=None):
         print(USAGE, file=sys.stderr)
         return 0 if argv else 2
 
+    if argv[0] in ("-V", "--version"):
+        # Dashed, like the other subcommands, so it cannot shadow an agent:
+        # `amask version` has to keep meaning "run version under the rain".
+        from . import __version__
+
+        print(f"amask {__version__}")
+        return 0
     if argv[0] == "--top":
         from . import top
 
@@ -350,7 +358,7 @@ def main(argv=None):
 def _cmd_list():
     found = control.sessions()
     if not found:
-        print("실행 중인 amask 세션이 없다.", file=sys.stderr)
+        print("No amask session is running.", file=sys.stderr)
         return 1
     for info in found:
         # Collapsed and clipped: an agent invoked with `-c` carries newlines in
@@ -372,14 +380,14 @@ def _cmd_config(args):
     """
     if not args:
         stored = config.load()
-        print(f"파일: {config.path()}" + ("" if stored else " (없음)"))
+        print(f"file: {config.path()}" + ("" if stored else " (none)"))
         for key in sorted(Settings.KEYS):
             shipped = Settings.shipped()[key]
-            line = f"  {key:<14} 기본 {shipped:g}"
+            line = f"  {key:<14} shipped {shipped:g}"
             if key in stored:
-                line += f"  저장 {stored[key]:g}"
+                line += f"  stored {stored[key]:g}"
             print(line)
-        print("새 세션이 시작할 값:")
+        print("what a new session starts with:")
         effective = Settings.resolve().as_dict()
         for key in sorted(effective):
             print(f"  {key:<14} {effective[key]:g}")
@@ -389,10 +397,10 @@ def _cmd_config(args):
     for item in args:
         key, sep, raw = item.partition("=")
         if not sep:
-            print(f"키=값 꼴이어야 한다: {item}", file=sys.stderr)
+            print(f"expected key=value: {item}", file=sys.stderr)
             return 2
         if key not in Settings.KEYS:
-            print(f"모르는 설정: {key} (가능한 것: {', '.join(Settings.KEYS)})",
+            print(f"unknown setting: {key} (known: {', '.join(Settings.KEYS)})",
                   file=sys.stderr)
             return 2
         if raw == "":
@@ -415,10 +423,11 @@ def _cmd_config(args):
         # leave an empty file, not a file full of the shipped values.
         written = config.save({key: probe.as_dict()[key] for key in values})
     except OSError as exc:
-        print(f"저장하지 못했다: {exc}", file=sys.stderr)
+        print(f"could not save: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(written, indent=2, sort_keys=True))
-    print("새 세션부터 적용된다. 돌고 있는 세션에는 `--top`에서 적용할 수 있다.",
+    print("New sessions start with this. Running ones are reached with `d` in "
+          "`--top`.",
           file=sys.stderr)
     return 0
 
@@ -430,19 +439,19 @@ def _cmd_control(args):
     target, cmd, rest = args[0], (args[1] if len(args) > 1 else "status"), args[2:]
     found = control.sessions()
     if not found:
-        print("실행 중인 amask 세션이 없다.", file=sys.stderr)
+        print("No amask session is running.", file=sys.stderr)
         return 1
     if target == "last":
         info = found[-1]
     else:
         info = next((s for s in found if str(s.get("pid")) == target), None)
         if info is None:
-            print(f"그런 세션이 없다: {target}", file=sys.stderr)
+            print(f"no such session: {target}", file=sys.stderr)
             return 1
 
     payload = {"cmd": cmd}
     if rest and cmd != "set":
-        print(f"{cmd}은 인자를 받지 않는다: {' '.join(rest)}", file=sys.stderr)
+        print(f"{cmd} takes no arguments: {' '.join(rest)}", file=sys.stderr)
         return 2
     if rest:
         values = {}
@@ -453,7 +462,7 @@ def _cmd_control(args):
     try:
         reply = control.request(info, payload)
     except (OSError, ValueError) as exc:
-        print(f"세션에 닿지 못했다: {exc}", file=sys.stderr)
+        print(f"could not reach the session: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(reply, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if reply.get("ok") else 1
