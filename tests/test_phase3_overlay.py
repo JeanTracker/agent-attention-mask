@@ -95,11 +95,20 @@ def test_manual_wake_is_fast():
     check("SC-002 키 입력 후 0.2초 이내 복귀", ok, f"fed={fed} woke={woke}")
 
 
+# The answer is typed at 5.0s, not at 3.0s, and that number is load-bearing.
+# The agent works until 2.5s and the wake lands at 2.0s, so the runner is
+# still inside a stretch of work when its own 1.0s cover delay elapses at
+# 3.0s -- it covers again, right on top of the feed, and eats the keystroke
+# as another wake gesture (D-008). The agent then waits for a line that will
+# never come and the case hangs until the harness kills it. Whether the race
+# is won or lost varies run to run; it was seen both ways. By 5.0s the work
+# has stopped, the idle threshold has handed the screen back, and the answer
+# is ordinary agent input again.
 def test_wake_key_is_not_forwarded_to_the_agent():
     res = run_in_pty(
         fixture("busy_then_read.py", 2.5),
-        feed=[(2.0, b"x"), (3.0, b"hello\r")],
-        timeout=20,
+        feed=[(2.0, b"x"), (5.0, b"hello\r")],
+        timeout=30,
     )
     check("D-008 깨우기 키가 에이전트 입력으로 새지 않음", b"GOT:hello" in res.data, repr(res.data[-160:]))
 
@@ -107,8 +116,8 @@ def test_wake_key_is_not_forwarded_to_the_agent():
 def test_mouse_click_wakes_without_injecting_garbage():
     res = run_in_pty(
         fixture("busy_then_read.py", 2.5),
-        feed=[(2.0, b"\x1b[<0;10;5M"), (2.1, b"\x1b[<0;10;5m"), (3.0, b"hello\r")],
-        timeout=20,
+        feed=[(2.0, b"\x1b[<0;10;5M"), (2.1, b"\x1b[<0;10;5m"), (5.0, b"hello\r")],
+        timeout=30,
     )
     check("SC-002/P-204 마우스 클릭 깨우기 + 잔여 이벤트 삼킴", b"GOT:hello" in res.data, repr(res.data[-160:]))
 
