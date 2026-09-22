@@ -9,6 +9,13 @@ The reasoning behind each judgement is recorded as a numbered entry in
 
 ## [Unreleased]
 
+### Added
+
+- **The stored defaults are editable from `--top`.** `c` opens them on their own screen:
+  `↑`/`↓` pick one of the three timing values, `+`/`-` move it, `0` forgets it again and
+  `enter` writes the file. `esc` leaves without writing. As before, the file governs new
+  sessions only -- `d` in the list is still what pushes values into running ones (D-050).
+
 ## [0.1.0] - 2026-09-22
 
 First release. The runner, the overlay and the control channel are in place, and the

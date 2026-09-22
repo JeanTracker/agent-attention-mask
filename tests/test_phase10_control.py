@@ -532,7 +532,8 @@ def test_a_row_says_what_the_session_is_doing():
 
 
 def _render(rows, selected=0, message="", rows_high=12, cols=116, marked=(),
-            detail=None, offset=0):
+            detail=None, offset=0, config_screen=False, stored=None,
+            staged=None, cursor=0):
     """Draw one frame in a pty and read the screen back as text."""
     import pty
     import select
@@ -549,6 +550,10 @@ def _render(rows, selected=0, message="", rows_high=12, cols=116, marked=(),
         os.environ["TOP_MARKED"] = " ".join(str(pid) for pid in marked)
         os.environ["TOP_DETAIL"] = "" if detail is None else str(detail)
         os.environ["TOP_OFFSET"] = str(offset)
+        os.environ["TOP_CONFIG"] = "1" if config_screen else ""
+        os.environ["TOP_STORED"] = json.dumps(stored or {})
+        os.environ["TOP_STAGED"] = json.dumps(staged or {})
+        os.environ["TOP_CURSOR"] = str(cursor)
         os.execv(sys.executable, [sys.executable, os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "fixtures", "draw_top.py")])
     fcntl.ioctl(master, termios.TIOCSWINSZ,
@@ -973,6 +978,142 @@ def test_the_config_subcommand_shows_and_changes():
             os.environ.pop("AMASK_CONFIG", None)
         else:
             os.environ["AMASK_CONFIG"] = had
+
+
+# -- editing those defaults from inside the view (D-050) --------------------
+
+
+def test_the_editor_has_its_own_key_table_and_says_so():
+    import curses
+
+    from amask import top
+
+    check("c가 편집 화면을 연다", top.action_for(ord("c")) == ("config", None),
+          str(top.action_for(ord("c"))))
+    check("상세 화면에서도 c로 연다",
+          top.detail_action_for(ord("c")) == ("config", None),
+          str(top.detail_action_for(ord("c"))))
+    check("편집 화면에서 esc는 나가기지 종료가 아니다",
+          top.config_action_for(27) == ("back", None))
+    check("편집 화면에서도 q는 종료", top.config_action_for(ord("q")) == ("quit", None))
+    check("enter는 저장", top.config_action_for(10) == ("save", None)
+          and top.config_action_for(curses.KEY_ENTER) == ("save", None))
+    check("↑↓는 항목 이동", top.config_action_for(curses.KEY_DOWN) == ("field", 1)
+          and top.config_action_for(ord("k")) == ("field", -1))
+    check("+/-는 값 변경", top.config_action_for(ord("+")) == ("edit", 1)
+          and top.config_action_for(ord("-")) == ("edit", -1))
+    check("0은 코드 기본값으로", top.config_action_for(ord("0")) == ("clear", None))
+    check("모르는 키는 아무것도 하지 않는다",
+          top.config_action_for(ord("z")) == (None, None))
+    for label in ("c config",):
+        check(f"두 도움줄 모두 {label}를 약속한다",
+              label in top.HELP and label in top.DETAIL_HELP,
+              top.HELP + " | " + top.DETAIL_HELP)
+    for label in ("save", "esc back", "0 shipped"):
+        check(f"편집 도움줄에 {label}가 있다", label in top.CONFIG_HELP,
+              top.CONFIG_HELP)
+    widths = [top._width(line) for line in (top.HELP, top.DETAIL_HELP,
+                                            top.CONFIG_HELP)]
+    check("세 도움줄 모두 95칸을 넘지 않는다", max(widths) <= 95, str(widths))
+    check("세 값 모두 한 번에 얼마씩 움직일지 정해져 있다",
+          set(top.STEP) == set(top.CONFIG_FIELDS), str(top.STEP))
+
+
+def test_editing_stages_the_change_and_enter_writes_it():
+    """The file is written by `enter` and by nothing else (D-050)."""
+    from amask import config, top
+
+    had = os.environ.get("AMASK_CONFIG")
+    try:
+        _with_config(None)
+        shipped = top._shipped()
+        stored = config.load()
+        staged = dict(stored)
+
+        staged, note = top.stage_value(staged, "overlay_delay", 1, shipped)
+        check("없던 값은 코드 기본값에서 출발한다", staged["overlay_delay"] == 5.0,
+              str(staged))
+        check("아직 저장하지 않았다고 말한다", "not saved" in note, note)
+        check("키를 눌러도 파일은 그대로", config.load() == {}, str(config.load()))
+
+        staged, _ = top.stage_value(staged, "idle_silence", 1, shipped)
+        check("0.1 단위도 부동소수 찌꺼기를 남기지 않는다",
+              staged["idle_silence"] == 1.6, repr(staged["idle_silence"]))
+
+        written, message = top.save_defaults(staged)
+        check("enter가 파일에 쓴다",
+              config.load() == {"overlay_delay": 5.0, "idle_silence": 1.6},
+              str(config.load()))
+        check("쓴 것을 돌려준다", written == config.load(), str(written))
+        check("새 세션부터라고 말한다", "new sessions only" in message, message)
+        check("돌고 있는 세션은 d로 민다고 말한다", "d pushes" in message, message)
+
+        cleared, note = top.clear_value(staged, "idle_silence", shipped)
+        check("0은 저장값을 지우는 것이지 기본값을 박는 것이 아니다",
+              "idle_silence" not in cleared, str(cleared))
+        check("무엇으로 돌아가는지 말한다", "1.5" in note, note)
+        top.save_defaults(cleared)
+        check("지운 키는 파일에서도 사라진다", config.load() == {"overlay_delay": 5.0},
+              str(config.load()))
+
+        refused, message = top.save_defaults({"overlay_delay": 99999.0})
+        check("범위를 벗어난 값은 소켓과 같은 검사기가 거부한다", refused is None, message)
+        check("거부 이유를 말한다", "out of range" in message, message)
+        check("거부된 뒤에도 파일은 그대로", config.load() == {"overlay_delay": 5.0},
+              str(config.load()))
+
+        check("d가 미는 값은 방금 저장한 값이다",
+              top.default_settings()["overlay_delay"] == 5.0,
+              str(top.default_settings()))
+
+        os.environ["AMASK_CONFIG"] = "/dev/null/nope/config.json"
+        failed, message = top.save_defaults({"overlay_delay": 5.0})
+        check("쓸 수 없으면 조용히 넘어가지 않는다", failed is None, message)
+        check("쓸 수 없는 이유를 화면에 남긴다", "could not save" in message, message)
+    finally:
+        if had is None:
+            os.environ.pop("AMASK_CONFIG", None)
+        else:
+            os.environ["AMASK_CONFIG"] = had
+
+
+def test_the_editor_screen_says_where_each_number_comes_from():
+    from amask import top
+
+    lines = top.config_lines(top._shipped(), {"overlay_delay": 8.0},
+                             {"overlay_delay": 8.0, "idle_silence": 2.0}, 1)
+    text = "\n".join(lines)
+    check("저장된 값은 stored", "overlay_delay" in text and "stored" in text, text)
+    check("건드리지 않은 값은 shipped", "hook_stall" in text and "shipped" in text, text)
+    check("아직 저장되지 않은 값은 changed", "changed" in text, text)
+    check("저장할 것이 있으면 그렇게 말한다", "Unsaved" in text, text)
+    check("새 세션에만 적용된다고 적혀 있다", "NEW session" in text, text)
+    check("어느 파일인지 적혀 있다", "config.json" in text, text)
+
+    same = "\n".join(top.config_lines(top._shipped(), {"overlay_delay": 8.0},
+                                      {"overlay_delay": 8.0}, 0))
+    check("바뀐 것이 없으면 저장할 것도 없다", "Nothing to save" in same, same)
+
+    for line in top.config_lines(top._shipped(), {}, {}, 0, width=40):
+        check("어느 줄도 요청한 폭을 넘지 않는다", top._width(line) <= 40, line)
+
+
+def test_the_editor_frame_draws_in_a_real_terminal():
+    screen = _render([], config_screen=True, stored={"overlay_delay": 8.0},
+                     staged={"overlay_delay": 9.0}, cursor=2,
+                     message="overlay_delay 9 -- not saved yet")
+    check("제목이 편집 화면이라고 말한다", "default settings" in screen, screen)
+    check("저장하지 않은 상태가 제목에 보인다", "unsaved" in screen, screen)
+    check("세 값이 모두 보인다",
+          all(key in screen for key in ("idle_silence", "hook_stall",
+                                        "overlay_delay")), screen)
+    check("마지막 응답이 보인다", "not saved yet" in screen, screen)
+    check("키 안내가 마지막 줄에 있다", "esc back" in screen, screen)
+    check("예외가 새지 않았다", "Traceback" not in screen, screen)
+
+    narrow = _render([], config_screen=True, cols=24, rows_high=6)
+    check("좁은 창에서도 예외가 없다", "Traceback" not in narrow, narrow)
+    check("좁은 창에서도 커서가 있는 항목이 보인다", "idle_silence" in narrow, narrow)
 
 
 def test_the_view_targets_the_marked_sessions():

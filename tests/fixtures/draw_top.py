@@ -22,12 +22,21 @@ MESSAGE = os.environ.get("TOP_MESSAGE", "")
 MARKED = {int(pid) for pid in os.environ.get("TOP_MARKED", "").split() if pid}
 DETAIL = os.environ.get("TOP_DETAIL", "")
 OFFSET = int(os.environ.get("TOP_OFFSET", "0"))
+# The defaults editor (D-050): its three inputs are the file as it was read,
+# the edit in progress and which field the cursor is on.
+CONFIG = os.environ.get("TOP_CONFIG", "")
+STORED = json.loads(os.environ.get("TOP_STORED", "{}"))
+STAGED = json.loads(os.environ.get("TOP_STAGED", "{}"))
+CURSOR = int(os.environ.get("TOP_CURSOR", "0"))
 
 
 def main(screen):
     rows = [(row.get("info", {}), row.get("status"), row.get("problem"))
             for row in ROWS]
-    if DETAIL:
+    if CONFIG:
+        top._draw_config(screen, top._shipped(), STORED, STAGED, CURSOR,
+                         MESSAGE)
+    elif DETAIL:
         wanted = int(DETAIL)
         row = top._find(rows, wanted)
         top._draw_detail(screen, row or ({"pid": wanted}, None, "사라짐"),
