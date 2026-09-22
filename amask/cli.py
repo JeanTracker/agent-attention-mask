@@ -45,6 +45,7 @@ from . import control
 from . import ptyproxy
 from .logbuf import LogBuffer
 from . import hooks
+from . import judge
 from .hud import Hud
 from .inputline import InputLine
 from .rain import Rain
@@ -481,12 +482,9 @@ class Runner:
         self._watch_stdin = True
         self._status = None
         self._mouse_guard_until = 0.0
-        self._last_output = None  # None until the agent has said anything
-        self._busy_since = None  # start of the current run of work; set in run()
         self._agent_alt = False
         self._agent_left_alt = False  # agent dropped its TUI while covered
         self._agent_repaints = False  # agent maintains a picture, not a log
-        self._hold_until = 0.0
         self._restore_size_at = None  # deferred half of the repaint nudge
         self._agent_modes = {}  # private modes the agent turned on or off
         self._typing = InputLine()  # what the user is typing, for the HUD
@@ -497,13 +495,12 @@ class Runner:
         # Per session, so an external app retuning one runner cannot reach
         # another (D-039). The module constants are the starting values.
         self.settings = Settings.resolve()
+        # The cover/uncover state machine, with the clock passed in (D-054).
+        # It is handed `self.hooks.available` as a callable because the
+        # channel opens partway through `run()`.
+        self.judge = judge.Judge(self.settings, lambda: self.hooks.available)
         self.control = control.ControlChannel()
         self._session_id = None  # arrives with the first hook event
-        self._hook_state = None  # None until the agent reports something
-        self._hook_at = 0.0
-        # Set by SKIP_KEYS, cleared when the next prompt is submitted: the
-        # user has said this turn is not worth covering.
-        self._skip_turn = False
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -523,8 +520,7 @@ class Runner:
         # an interactive agent simply will not sustain output at its prompt.
         # The work clock starts now, because an agent that has not spoken yet is
         # working -- a one-shot run is silent for its whole thinking time.
-        self._busy_since = time.monotonic()
-        self._hold_until = self._busy_since + self.settings.overlay_delay
+        self.judge.started(time.monotonic())
         # After the spawn on purpose. Python leaves sockets non-inheritable
         # (PEP 446) so an exec would close it anyway, but opening it on this
         # side of the fork means the agent never has the fd at all -- reaching
@@ -612,20 +608,9 @@ class Runner:
             ptyproxy.set_winsize(self.master_fd, rows, cols)
 
         now = time.monotonic()
-        if self._hooks_speaking():
-            # The agent is telling us what it is doing; silence is not evidence
-            # of anything while a tool call runs.
-            idle = self._hook_state != hooks.BUSY
-            if idle:
-                # Its own output must not restart the clock either: an idle
-                # prompt still repaints every few seconds, and that was enough
-                # to re-cover the screen after the agent said it had stopped.
-                self._busy_since = None
-        else:
-            idle = self._agent_is_idle()
-            if idle:
-                # The run of output ended, so the next one starts a fresh clock.
-                self._busy_since = None
+        # Hooks first, timing as the fallback, and the work clock cleared the
+        # moment either of them says idle (D-025, D-054).
+        idle = self.judge.idle(now)
 
         if self.term.in_overlay:
             if idle:
@@ -637,15 +622,15 @@ class Runner:
                 rows, cols = self.term.get_size()
                 # Render the panel first so the rain knows exactly which cells
                 # the bands occupy this frame; their widths follow their text.
-                busy = self._busy_since is not None
+                busy = self.judge.busy_since is not None
                 panel = self.hud.render(
                     rows,
                     cols,
                     busy=busy,
-                    since=self._busy_since or now,
+                    since=self.judge.busy_since or now,
                     hidden_bytes=self.log.pending,
                     frame=self._frame // 4,
-                    idle_hint=self._idle_suspected(),
+                    idle_hint=self.judge.idle_suspected(now, IDLE_HINT_AFTER),
                 )
                 self.rain.set_hole(self.hud.clear_spans(rows, cols))
                 self.rain.set_halo(self.hud.halo_spans(rows, cols))
@@ -654,7 +639,7 @@ class Runner:
                 self.rain.set_speed_scale(1.0 if busy else 0.5)
                 self.term.write(self.rain.frame())
                 self.term.write(panel)
-        elif self._should_cover(now):
+        elif self.judge.should_cover(now):
             self._sleep()
 
     # -- agent state -------------------------------------------------------
@@ -723,7 +708,7 @@ class Runner:
                 # (D-038). A turn with no prompt text at all is treated as
                 # real: an agent on the FIFO without Claude Code's payload has
                 # no other turn boundary to offer.
-                self._skip_turn = False
+                self.judge.turn_opened()
 
             if prompt:
                 # Straight from the agent, so no reconstructing it from
@@ -742,14 +727,8 @@ class Runner:
             # inputs and a wrong call looks the same from outside whichever
             # one made it; this is what tells them apart after the fact.
             _debug(f"hook {name} -> {meaning} prompt_id={prompt_id}")
-            self._hook_state = meaning
-            self._hook_at = time.monotonic()
-            if meaning == hooks.BUSY:
-                if self._busy_since is None:
-                    self._busy_since = self._hook_at
-            else:
+            if self.judge.hook(meaning, time.monotonic()):
                 # The agent finished its turn or is asking the user something.
-                self._busy_since = None
                 self._wake()
 
     # -- the control channel ------------------------------------------------
@@ -785,9 +764,9 @@ class Runner:
             # WAITING span the next `UserPromptSubmit` would clear the flag
             # (D-038), so accepting it there would report a success that
             # quietly evaporates.
-            if self._busy_since is None:
+            if not self.judge.accepts_skip():
                 return {"ok": False, "reason": "no turn in progress"}
-            self._skip_turn = True
+            self.judge.skip()
             self._wake()
             _debug("control: skip this turn")
             return {"ok": True, "status": self._status_report()}
@@ -796,7 +775,7 @@ class Runner:
     def _status_report(self):
         """What the runner knows, as an external app would ask it."""
         now = time.monotonic()
-        state = self._hook_state
+        state = self.judge.hook_state
         return {
             "pid": os.getpid(),
             "session_id": self._session_id,
@@ -805,12 +784,12 @@ class Runner:
             # The screen right now, which is the one thing no other channel
             # can report -- everything else here the hooks also carry.
             "covered": self.term.in_overlay,
-            "busy": self._busy_since is not None,
-            "busy_seconds": (now - self._busy_since) if self._busy_since else 0.0,
+            "busy": self.judge.busy_since is not None,
+            "busy_seconds": self.judge.busy_seconds(now),
             "hooks": self.hooks.available,
             "hook_state": state,
-            "skip_turn": self._skip_turn,
-            "idle_suspected": self._idle_suspected(),
+            "skip_turn": self.judge.skip_turn,
+            "idle_suspected": self.judge.idle_suspected(now, IDLE_HINT_AFTER),
             # The user asked for this by name: without the question, a list of
             # sessions is a list of pids. It is the agent's own report of what
             # was asked (D-031 keeps injected markup out of it) and it stays
@@ -824,24 +803,6 @@ class Runner:
             "hidden_bytes": self.log.pending,
             "settings": self.settings.as_dict(),
         }
-
-    def _idle_suspected(self):
-        """Hooks say working, but nothing has come out for a while.
-
-        Display only -- see IDLE_HINT_AFTER. This never feeds the state
-        machine, so a false positive costs a louder hint and nothing more.
-        """
-        if self._hook_state != hooks.BUSY or self._last_output is None:
-            return False
-        return (time.monotonic() - self._last_output) >= IDLE_HINT_AFTER
-
-    def _hooks_speaking(self):
-        """True while the agent's own report is still the best thing we have."""
-        if not self.hooks.available or self._hook_state is None:
-            return False
-        if self._hook_state != hooks.BUSY:
-            return True  # a waiting agent stays waiting until it says otherwise
-        return (time.monotonic() - self._hook_at) < self.settings.hook_stall
 
     def _handle_stdin(self):
         """Returns False if the loop should stop."""
@@ -876,7 +837,7 @@ class Runner:
             # uncovered every byte is forwarded, and taking `q` out of that
             # stream would eat the letter from what the user is typing.
             if data.strip() in SKIP_KEYS:
-                self._skip_turn = True
+                self.judge.skip()
                 _debug("skip: user asked to stay uncovered for this turn")
             self._wake()
             self._drain_stdin(WAKE_DRAIN)
@@ -900,7 +861,7 @@ class Runner:
         self._capture_prompt(data)
 
         # Real input: the user is present, so hold the screensaver off.
-        self._hold_until = time.monotonic() + self.settings.overlay_delay
+        self.judge.held(time.monotonic())
         try:
             os.write(self.master_fd, data)
         except OSError:
@@ -930,11 +891,11 @@ class Runner:
             # time, and that reply would arrive in passthrough and be typed
             # straight into the agent. The agent already got its answer.
             self.log.append(_TERM_QUERY.sub(b"", data))
-            self._mark_output()
+            self.judge.output(time.monotonic())
             for query in _TERM_QUERY.findall(data):
                 self.term.write(query)
         else:
-            self._mark_output()
+            self.judge.output(time.monotonic())
             self.term.write(data)
 
     def _scrape_status(self, data):
@@ -990,56 +951,20 @@ class Runner:
             out.append(b"\x1b[?%dh" % mode if on else b"\x1b[?%dl" % mode)
         return b"".join(out)
 
-    def _mark_output(self):
-        now = time.monotonic()
-        if self._busy_since is None:
-            self._busy_since = now
-        self._last_output = now
-
-    def _agent_is_idle(self):
-        """True once the agent has produced output and then fallen silent.
-
-        The arming condition matters in both directions: an agent that has not
-        printed anything yet is starting up, not waiting at a prompt, so it
-        counts as working and may be covered.
-        """
-        if self._last_output is None:
-            return False
-        return (time.monotonic() - self._last_output) >= self.settings.idle_silence
-
     def _capture_prompt(self, data):
         """Track the line being typed so the overlay can show what was asked."""
         submitted = self._typing.feed(data)
         if submitted:
             self.hud.prompt = submitted
             # The turn boundary for an agent that fires no hooks at all.
-            self._skip_turn = False
-
-    def _should_cover(self, now):
-        """Is the agent genuinely working, unattended, right now?
-
-        Two conditions, each there because of a way the screensaver misfires:
-        recent typing (or a recent manual wake) means the user is at the
-        keyboard, and the work has to be sustained rather than a stray repaint.
-        """
-        if self._skip_turn:
-            # _wake() promises a keypress "buys reading time, not a permanent
-            # dismissal", and that is still true of every other key. This one
-            # is the exception the user asked for, because the case it covers
-            # -- an interrupted turn the hook channel never reports -- cannot
-            # be detected from the runner's side at all (D-036).
-            return False
-        if now < self._hold_until:
-            return False
-        return self._busy_since is not None and (
-            (now - self._busy_since) >= self.settings.overlay_delay
-        )
+            self.judge.turn_opened()
 
     def _sleep(self):
         """Cover the screen with the rain."""
         _debug(
-            f"cover: hooks={self._hooks_speaking()} state={self._hook_state} "
-            f"busy_for={time.monotonic() - (self._busy_since or 0):.2f}"
+            f"cover: hooks={self.judge.hooks_speaking(time.monotonic())} "
+            f"state={self.judge.hook_state} "
+            f"busy_for={self.judge.busy_seconds(time.monotonic()):.2f}"
         )
         rows, cols = self.term.get_size()
         self.rain.resize(rows, cols)
@@ -1061,7 +986,8 @@ class Runner:
         """
         if not self.term.in_overlay:
             return
-        _debug(f"wake: hooks={self._hooks_speaking()} state={self._hook_state}")
+        _debug(f"wake: hooks={self.judge.hooks_speaking(time.monotonic())} "
+               f"state={self.judge.hook_state}")
         took_alt = self.term.took_alt
         self.term.exit_overlay(self._mode_restore())  # must precede the flush (P-203)
 
@@ -1079,7 +1005,7 @@ class Runner:
 
         if repainting or not took_alt:
             self._nudge_repaint()
-        self._hold_until = time.monotonic() + self.settings.overlay_delay
+        self.judge.held(time.monotonic())
 
     def _nudge_repaint(self):
         """Make a full-screen agent redraw itself from scratch.

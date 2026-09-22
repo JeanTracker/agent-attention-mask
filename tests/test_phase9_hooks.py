@@ -157,21 +157,20 @@ def test_a_waiting_agent_does_not_go_stale():
     """
     import amask.cli as cli
     from amask import hooks as hooks_mod
+    from amask.judge import Judge
 
-    class Fake:
-        available = True
+    # The judgement, with the clock handed in rather than waited out (D-054).
+    settings = cli.Settings.from_env()
+    judge = Judge(settings, lambda: True)
+    now = 1000.0
+    judge.hook_state = hooks_mod.WAITING
+    judge.hook_at = now - (settings.hook_stall + 60)
+    check("오래된 waiting도 유효", judge.hooks_speaking(now), "만료됨")
 
-    runner = cli.Runner.__new__(cli.Runner)
-    runner.hooks = Fake()
-    runner.settings = cli.Settings.from_env()
-    runner._hook_state = hooks_mod.WAITING
-    runner._hook_at = time.monotonic() - (runner.settings.hook_stall + 60)
-    check("오래된 waiting도 유효", runner._hooks_speaking(), "만료됨")
-
-    runner._hook_state = hooks_mod.BUSY
-    check("오래된 busy는 만료", not runner._hooks_speaking(), "유효 판정")
-    runner._hook_at = time.monotonic()
-    check("최근 busy는 유효", runner._hooks_speaking(), "만료됨")
+    judge.hook_state = hooks_mod.BUSY
+    check("오래된 busy는 만료", not judge.hooks_speaking(now), "유효 판정")
+    judge.hook_at = now
+    check("최근 busy는 유효", judge.hooks_speaking(now), "만료됨")
 
 
 def test_an_idle_panel_ignores_its_own_repaints():
@@ -551,10 +550,17 @@ def test_idle_hint_never_touches_state():
     from amask import cli
 
     source = inspect.getsource(cli.Runner._tick)
-    check("_tick은 _idle_suspected를 상태 판정에 쓰지 않음",
-          source.count("_idle_suspected") == 1
-          and "idle_hint=self._idle_suspected()" in source,
+    check("_tick은 idle_suspected를 상태 판정에 쓰지 않음",
+          source.count("idle_suspected") == 1
+          and "idle_hint=self.judge.idle_suspected(" in source,
           "상태 분기에서 참조됨")
+
+    # And the judge itself keeps it out of the decision (D-036, D-054).
+    from amask.judge import Judge
+
+    decision = inspect.getsource(Judge.should_cover) + inspect.getsource(Judge.idle)
+    check("Judge의 판정 경로에도 들어가지 않는다",
+          "idle_suspected" not in decision, decision)
 
 
 if __name__ == "__main__":

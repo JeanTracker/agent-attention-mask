@@ -14,8 +14,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Everything, every time: the layer that needs no terminal (D-054). Two
+  # seconds a job, so it is the gate that can afford to be on every push.
+  fast:
+    name: fast / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python3 tests/run_fast.py
+
   suite:
     name: ${{ matrix.os }} / py${{ matrix.python }}
+    # Twelve minutes a job, nearly all of it waiting on real ptys, so it runs
+    # where that wall clock buys something: what has landed on master and what
+    # is about to be tagged. On a pull request the contributor's machine runs
+    # it instead -- CONTRIBUTING says so, and it is one command.
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:

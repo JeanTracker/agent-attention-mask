@@ -47,12 +47,15 @@ not cite anything in it as evidence.
 ## Verification
 
 ```sh
-python3 tests/run_all.py
+python3 tests/run_fast.py    # ~2s, no terminal needed
+python3 tests/run_all.py     # ~12min, real ptys -- before you push
 ```
 
-9 phase suites. If you changed code, run this and report the result. If you need a real
-agent's timing or hook payloads, build the observations first with `tests/tap_agent.py` /
-`tests/probe_hooks.py`.
+10 phase suites in the full run. If you changed code, use the fast tier as you go and the
+full one before pushing, and report the result. CI runs only the fast tier on a pull
+request (D-054), so the terminal-layer suites -- P-103's scrollback, SC-002's latency --
+are checked on this machine or not at all. If you need a real agent's timing or hook
+payloads, build the observations first with `tests/tap_agent.py` / `tests/probe_hooks.py`.
 
 ## Watch out
 
