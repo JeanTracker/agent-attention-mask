@@ -300,7 +300,9 @@ python3 tests/run_all.py
 ```
 
 Nine phase suites, driving real ptys against fixture agents in `tests/fixtures/`. CI runs
-them on Linux and macOS against Python 3.11-3.13.
+them on Linux and macOS against Python 3.13. The floor is 3.11, and nothing in the code is
+newer than that, but it is checked by hand rather than on every push -- if you are on 3.11
+or 3.12, run the suites before opening a pull request.
 
 `CONTRIBUTING.md` has the procedure for changing the code and the module map.
 `.governance/DECISIONS.md` records why the design is the way it is -- every judgement above

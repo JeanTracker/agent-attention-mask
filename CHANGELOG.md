@@ -25,6 +25,9 @@ The reasoning behind each judgement is recorded as a numbered entry in
   the key in bold, grouped by purpose with `│`, and laid out for the window it is in: fuller
   wording when there is room, and the keys it can spare dropped when there is not. `help(?)`
   and `quit(q)` survive any width (D-052).
+- CI runs the suites on Linux and macOS against Python 3.13 only. The suite drives real
+  ptys for minutes a job, and the axis that has ever caught anything twice is the OS; the
+  3.11 floor is now checked by hand (D-053).
 
 ## [0.1.0] - 2026-09-22
 
