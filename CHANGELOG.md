@@ -41,6 +41,7 @@ nine phase suites pass on Linux and macOS.
 - **TUI agents.** A full-screen agent is detected and redrawn by a brief pty resize instead of
   having its hidden output replayed over a stale screen.
 - **CI.** The phase suites run on Linux and macOS against Python 3.11, 3.12 and 3.13.
+- **Licence.** MIT.
 
 [Unreleased]: https://github.com/JeanTracker/agent-attention-mask/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/JeanTracker/agent-attention-mask/releases/tag/v0.1.0

@@ -276,4 +276,4 @@ Release notes are in `CHANGELOG.md`.
 
 ## Licence
 
-Not yet chosen.
+MIT -- see `LICENSE`.
