@@ -36,17 +36,21 @@ STEP = {"overlay_delay": 1.0, "idle_silence": 0.1, "hook_stall": 10.0}
 # One line, and it has to fit: measured at 95 cells so a 96-column terminal
 # still shows the last key. Longer labels pushed `q quit` off the screen.
 HELP = ("space mark  a all  enter detail  s skip  w wake  d defaults  "
-        "c config  r poll  q quit")
+        "c config  r poll  ? keys  q quit")
 
 # The detail pane's own line. It has a whole screen, but the same 95-cell
 # budget applies -- a 96-column terminal must still show the last key.
 DETAIL_HELP = ("↑↓ scroll  esc/enter list  s skip  w wake  d defaults  "
-               "c config  r poll  q quit")
+               "c config  r poll  ? keys  q quit")
 
 # The editor's own line (D-050). Six keys with the whole screen to say them
 # in, so nothing here is abbreviated.
 CONFIG_HELP = ("↑↓ field  +/- change  0 shipped  enter save  esc back  "
-               "q quit")
+               "? keys  q quit")
+
+# The key reference's own line (D-051). It is the screen people arrive at
+# when the others were not clear enough, so it says only how to leave.
+KEYS_HELP = "↑↓ scroll  esc/enter back  q quit"
 
 # What the runner reports in its own words, so a Korean screen does not show
 # the protocol's `busy`/`waiting` (D-044).
@@ -105,8 +109,8 @@ def action_for(key):
     """One keypress -> what to do. Pure, so the suite can check the table.
 
     Returns (kind, argument), where kind is one of "quit", "move", "mark",
-    "mark-all", "defaults", "cmd", "tune", "refresh", "detail", "config"
-    or None.
+    "mark-all", "defaults", "cmd", "tune", "refresh", "detail", "config",
+    "keys" or None.
     """
     if key in (ord("q"), ord("Q"), 27):
         return "quit", None
@@ -128,6 +132,8 @@ def action_for(key):
         return "defaults", None
     if key in (ord("c"), ord("C")):
         return "config", None
+    if key in (ord("?"), curses.KEY_F1):
+        return "keys", None
     if key in (ord("+"), ord("=")):
         return "tune", ("overlay_delay", STEP["overlay_delay"])
     if key in (ord("-"), ord("_")):
@@ -218,7 +224,7 @@ def detail_action_for(key):
     if key in (curses.KEY_END, ord("G")):
         return "scroll-edge", 1
     kind, argument = action_for(key)
-    if kind in ("cmd", "tune", "refresh", "defaults", "config"):
+    if kind in ("cmd", "tune", "refresh", "defaults", "config", "keys"):
         return kind, argument
     return None, None
 
@@ -481,6 +487,121 @@ def _shipped():
     return Settings.shipped()
 
 
+# -- the key reference (D-051) ----------------------------------------------
+#
+# The three hint lines fit inside 95 cells, and that budget buys abbreviation:
+# `d defaults` cannot say *which* defaults, and `[] idle` cannot say what idle
+# means at all. This screen is where the sentence goes. The hint lines stay --
+# they are what you read while working -- and this is what `?` opens when they
+# were not enough.
+#
+# The table is the source: the screen is drawn from it, so a key that is added
+# without a sentence here is a key this screen will not claim to explain.
+KEY_HELP = (
+    ("On the list", (
+        ("↑ ↓  j k", "move between sessions"),
+        ("space", "mark this session. Every command below then applies to all"
+                  " the marked ones; with nothing marked it is the"
+                  " highlighted row"),
+        ("a", "mark them all, or clear the marks"),
+        ("enter", "open this session on a screen of its own"),
+        ("s", "skip: do not cover for the rest of this turn. The same thing"
+              " pressing q does while the rain is up"),
+        ("w", "wake: take the cover off now"),
+        ("+  -", "this session's cover delay, by 1s a press"),
+        ("[  ]", "this session's idle threshold, by 0.1s a press"),
+        ("d", "push the stored defaults into this session"),
+        ("c", "edit the stored defaults"),
+        ("r", "poll now rather than waiting for the next half second"),
+        ("q", "quit. The sessions themselves keep running -- this is only a"
+              " window onto them"),
+    )),
+    ("On one session (enter)", (
+        ("↑ ↓  j k", "scroll a line"),
+        ("space  b", "scroll a page; PgDn and PgUp do the same"),
+        ("g  G", "the top, the bottom"),
+        ("esc  enter", "back to the list"),
+        ("s w + - [ ] d c r",
+         "the same commands, and here they reach the session you are looking"
+         " at and no other -- marks do not apply"),
+    )),
+    ("On the defaults (c)", (
+        ("↑ ↓", "pick one of the three values"),
+        ("+  -", "move it. Nothing is written yet -- the title says"
+                 " (unsaved)"),
+        ("0", "forget the stored value, so the shipped default applies again"),
+        ("enter", "write the file. New sessions only; d is what reaches the"
+                  " ones already running"),
+        ("esc", "leave without writing"),
+    )),
+    ("What the words mean", (
+        ("cover", "the matrix rain over the agent's screen. Everything the"
+                  " agent printed while covered comes back when it lifts"),
+        ("cover delay", "how long the agent has to work without a break"
+                        " before the rain goes up"),
+        ("idle threshold", "with no hooks, how much silence is taken to mean"
+                           " the agent stopped working"),
+        ("hook stall", "with hooks, how long a working agent may stay silent"
+                       " before its last hook is treated as lost"),
+        ("stored defaults", "~/.amask/config.json -- what a NEW session starts"
+                            " with. A running session keeps its own values"
+                            " until you push these into it with d"),
+    )),
+)
+
+# The label column of the reference. The widest label is `s w + - [ ] d c r`.
+KEY_LABEL = 20
+
+
+def keys_action_for(key):
+    """One keypress on the key reference -> what to do. Pure.
+
+    Returns (kind, argument), kind one of "quit", "back", "scroll",
+    "scroll-page", "scroll-edge" or None.
+
+    `?` closes it as well as opening it: the screen you opened with one key is
+    the screen that key should put away.
+    """
+    if key in (ord("q"), ord("Q")):
+        return "quit", None
+    if key in _ENTER or key in (27, curses.KEY_BACKSPACE, 127, 8, ord("?")):
+        return "back", None
+    if key in (curses.KEY_DOWN, ord("j")):
+        return "scroll", 1
+    if key in (curses.KEY_UP, ord("k")):
+        return "scroll", -1
+    if key in (curses.KEY_NPAGE, ord(" ")):
+        return "scroll-page", 1
+    if key in (curses.KEY_PPAGE, ord("b")):
+        return "scroll-page", -1
+    if key in (curses.KEY_HOME, ord("g")):
+        return "scroll-edge", -1
+    if key in (curses.KEY_END, ord("G")):
+        return "scroll-edge", 1
+    return None, None
+
+
+def keys_lines(width=78):
+    """The key reference, as drawn lines. Pure, like `detail_lines`.
+
+    Wrapped on cells and not characters, and the sentence is indented under
+    its key, so a narrow window folds the explanation rather than losing it
+    (D-045).
+    """
+    body = max(8, width - KEY_LABEL - 2)
+    out = []
+    for title, rows in KEY_HELP:
+        if out:
+            out.append("")
+        out.append(title)
+        for label, sentence in rows:
+            wrapped = _wrap(sentence, body) or [""]
+            out.append("  " + _pad(label, KEY_LABEL) + wrapped[0])
+            for extra in wrapped[1:]:
+                out.append(" " * (KEY_LABEL + 2) + extra)
+    return out
+
+
 # -- the stored defaults, edited in place (D-050) ----------------------------
 #
 # `d` pushes the stored defaults into running sessions, but until now the only
@@ -502,7 +623,7 @@ def config_action_for(key):
     """One keypress inside the defaults editor -> what to do. Pure.
 
     Returns (kind, argument), kind one of "quit", "back", "field", "edit",
-    "clear", "save" or None.
+    "clear", "save", "keys" or None.
 
     `esc` leaves rather than quits, unlike the list: this screen is something
     you stepped into, and the key that gets you out of a pane is the same one
@@ -529,6 +650,8 @@ def config_action_for(key):
         return "edit", -1
     if key in (ord("0"), ord("x"), ord("X")):
         return "clear", None
+    if key in (ord("?"), curses.KEY_F1):
+        return "keys", None
     return None, None
 
 
@@ -763,6 +886,37 @@ def _draw_detail(screen, row, message, offset=0):
     return offset
 
 
+def _draw_keys(screen, message, offset=0):
+    """The key reference, full screen and scrolled to `offset` (D-051).
+
+    Returns the offset it actually drew at, clamped to the content -- the
+    same contract as `_draw_detail`, and for the same reason: how many lines
+    the sentences fold into depends on the window, which the loop does not
+    know when it handles the key.
+    """
+    screen.erase()
+    height, width = screen.getmaxyx()
+    lines = keys_lines(width=max(20, width - 3))
+    capacity = body_capacity(height)
+    offset = clamp_offset(len(lines), capacity, offset)
+    shown = lines[offset:offset + capacity]
+
+    title = " amask  keys"
+    marker = more_marker(offset, offset + len(shown), len(lines))
+    if marker:
+        title += f"  {marker}"
+    _put(screen, 0, _pad(title, width - 1), curses.A_REVERSE)
+
+    for index, line in enumerate(shown):
+        _put(screen, 2 + index, "  " + line)
+
+    if message:
+        _put(screen, height - 2, message)
+    _put(screen, height - 1, _pad(KEYS_HELP, width - 1), curses.A_REVERSE)
+    screen.refresh()
+    return offset
+
+
 def _draw_config(screen, shipped, stored, staged, cursor, message):
     """The defaults editor, full screen (D-050).
 
@@ -814,6 +968,8 @@ def _loop(screen):
     viewing = None  # the pid whose detail pane is open, for the same reason
     offset = 0  # how far the detail pane is scrolled, in lines
     editing = False  # whether the defaults editor is in front (D-050)
+    helping = False  # whether the key reference is in front of all of it (D-051)
+    help_offset = 0  # how far that reference is scrolled
     cursor = 0  # which of the three defaults it is on
     stored = {}  # the file as it was read; staged is the edit in progress
     staged = {}
@@ -826,7 +982,11 @@ def _loop(screen):
             selected = max(0, len(rows) - 1)
         live = {info.get("pid") for info, _, _ in rows}
         marked &= live  # a session that exited is no longer selected
-        if editing:
+        if helping:
+            # In front of whichever screen opened it: `esc` puts it away and
+            # that screen is still underneath, unchanged.
+            help_offset = _draw_keys(screen, message, help_offset)
+        elif editing:
             _draw_config(screen, shipped, stored, staged, cursor, message)
         elif viewing is not None:
             row = _find(rows, viewing)
@@ -837,7 +997,7 @@ def _loop(screen):
                 viewing = None
             else:
                 offset = _draw_detail(screen, row, message, offset)
-        if not editing and viewing is None:
+        if not helping and not editing and viewing is None:
             _draw(screen, rows, selected, marked, message)
 
         key = screen.getch()
@@ -845,6 +1005,21 @@ def _loop(screen):
             # Which keys mean what, and what a command would apply to,
             # depend on the mode; what the commands then *do* does not, so
             # the two modes part company only over their own keys.
+            if helping:
+                kind, argument = keys_action_for(key)
+                page = max(1, body_capacity(screen.getmaxyx()[0]) - 1)
+                if kind == "quit":
+                    return
+                if kind == "back":
+                    helping, message = False, ""
+                elif kind == "scroll":
+                    help_offset = max(0, help_offset + argument)
+                elif kind == "scroll-page":
+                    help_offset = max(0, help_offset + argument * page)
+                elif kind == "scroll-edge":
+                    help_offset = 0 if argument < 0 else 10 ** 6  # clamped
+                continue
+
             if editing:
                 # The editor talks to a file, not to a session, so it shares
                 # nothing with the other two beyond `q`. Its keys are handled
@@ -866,6 +1041,8 @@ def _loop(screen):
                     written, message = save_defaults(staged)
                     if written is not None:
                         stored, staged = dict(written), dict(written)
+                elif kind == "keys":
+                    helping, help_offset, message = True, 0, ""
                 continue
 
             if viewing is not None:
@@ -876,6 +1053,9 @@ def _loop(screen):
                 chosen = command_targets(rows, marked, selected, None)
             if kind == "quit":
                 return
+            if kind == "keys":
+                helping, help_offset, message = True, 0, ""
+                continue
             if kind == "config":
                 # Read the file at the moment the screen opens, not at
                 # startup: `amask --config` in another terminal, or another

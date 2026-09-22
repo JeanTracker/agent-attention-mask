@@ -533,7 +533,7 @@ def test_a_row_says_what_the_session_is_doing():
 
 def _render(rows, selected=0, message="", rows_high=12, cols=116, marked=(),
             detail=None, offset=0, config_screen=False, stored=None,
-            staged=None, cursor=0):
+            staged=None, cursor=0, keys_screen=False):
     """Draw one frame in a pty and read the screen back as text."""
     import pty
     import select
@@ -554,6 +554,7 @@ def _render(rows, selected=0, message="", rows_high=12, cols=116, marked=(),
         os.environ["TOP_STORED"] = json.dumps(stored or {})
         os.environ["TOP_STAGED"] = json.dumps(staged or {})
         os.environ["TOP_CURSOR"] = str(cursor)
+        os.environ["TOP_KEYS"] = "1" if keys_screen else ""
         os.execv(sys.executable, [sys.executable, os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "fixtures", "draw_top.py")])
     fcntl.ioctl(master, termios.TIOCSWINSZ,
@@ -1013,8 +1014,8 @@ def test_the_editor_has_its_own_key_table_and_says_so():
         check(f"편집 도움줄에 {label}가 있다", label in top.CONFIG_HELP,
               top.CONFIG_HELP)
     widths = [top._width(line) for line in (top.HELP, top.DETAIL_HELP,
-                                            top.CONFIG_HELP)]
-    check("세 도움줄 모두 95칸을 넘지 않는다", max(widths) <= 95, str(widths))
+                                            top.CONFIG_HELP, top.KEYS_HELP)]
+    check("네 도움줄 모두 95칸을 넘지 않는다", max(widths) <= 95, str(widths))
     check("세 값 모두 한 번에 얼마씩 움직일지 정해져 있다",
           set(top.STEP) == set(top.CONFIG_FIELDS), str(top.STEP))
 
@@ -1114,6 +1115,77 @@ def test_the_editor_frame_draws_in_a_real_terminal():
     narrow = _render([], config_screen=True, cols=24, rows_high=6)
     check("좁은 창에서도 예외가 없다", "Traceback" not in narrow, narrow)
     check("좁은 창에서도 커서가 있는 항목이 보인다", "idle_silence" in narrow, narrow)
+
+
+# -- the key reference behind `?` (D-051) -----------------------------------
+
+
+def test_every_screen_opens_the_key_reference_with_the_same_key():
+    import curses
+
+    from amask import top
+
+    check("목록에서 ?", top.action_for(ord("?")) == ("keys", None))
+    check("상세에서도 ?", top.detail_action_for(ord("?")) == ("keys", None))
+    check("편집 화면에서도 ?", top.config_action_for(ord("?")) == ("keys", None))
+    check("?는 닫기도 한다", top.keys_action_for(ord("?")) == ("back", None))
+    check("esc/enter도 닫는다", top.keys_action_for(27) == ("back", None)
+          and top.keys_action_for(10) == ("back", None))
+    check("여기서도 q는 종료", top.keys_action_for(ord("q")) == ("quit", None))
+    check("긴 화면이므로 스크롤한다",
+          top.keys_action_for(curses.KEY_DOWN) == ("scroll", 1)
+          and top.keys_action_for(ord(" ")) == ("scroll-page", 1)
+          and top.keys_action_for(ord("G")) == ("scroll-edge", 1))
+    check("모르는 키는 아무것도 하지 않는다",
+          top.keys_action_for(ord("z")) == (None, None))
+    for line in (top.HELP, top.DETAIL_HELP, top.CONFIG_HELP):
+        check("세 도움줄 모두 ? 를 가리킨다", "? keys" in line, line)
+    check("도움말 화면은 나가는 법만 적는다",
+          "back" in top.KEYS_HELP and "q quit" in top.KEYS_HELP, top.KEYS_HELP)
+
+
+def test_the_key_reference_explains_the_keys_in_sentences():
+    from amask import top
+
+    text = "\n".join(top.keys_lines(76))
+    for key in ("space", "enter", "esc", "+", "[", "0", "d", "c", "r", "q"):
+        check(f"{key} 키가 설명돼 있다", key in text, text[:200])
+    for word in ("cover delay", "idle threshold", "stored defaults",
+                 "hook stall"):
+        check(f"{word}가 무엇인지 적혀 있다", word in text, text[:200])
+    check("화면별로 묶여 있다",
+          "On the list" in text and "On one session" in text
+          and "On the defaults" in text, text[:200])
+    check("표시(mark)가 무엇에 쓰이는지 말한다", "marked ones" in text, text[:400])
+    check("q가 세션을 죽이지 않는다고 말한다",
+          "sessions themselves keep running" in text, text)
+    check("저장이 새 세션부터라고 말한다", "New sessions only" in text, text)
+
+    for line in top.keys_lines(40):
+        check("어느 줄도 요청한 폭을 넘지 않는다", top._width(line) <= 40, line)
+    folded = " ".join(" ".join(top.keys_lines(40)).split())
+    check("좁은 폭에서도 문장이 사라지지 않는다", "marked ones" in folded, folded)
+
+
+def test_the_key_reference_draws_and_scrolls_in_a_real_terminal():
+    screen = _render([], keys_screen=True)
+    check("제목이 keys라고 말한다", "amask  keys" in screen, screen)
+    check("첫 묶음이 보인다", "On the list" in screen, screen)
+    check("남은 줄 수를 제목에 적는다", "↓" in screen, screen)
+    check("나가는 법이 마지막 줄에 있다", "esc/enter back" in screen, screen)
+    check("예외가 새지 않았다", "Traceback" not in screen, screen)
+
+    scrolled = _render([], keys_screen=True, offset=10 ** 6)
+    check("끝까지 스크롤하면 마지막 묶음이 보인다",
+          "stored defaults" in scrolled, scrolled)
+    # The arrows in the title say how much is off-screen; the body has its
+    # own `↑ ↓` as a key name, so only the title line is read here.
+    title = [line for line in scrolled.split("\n") if "amask  keys" in line][0]
+    check("끝에서는 제목에 위쪽 표시만 남는다", "↑" in title and "↓" not in title,
+          title)
+
+    narrow = _render([], keys_screen=True, cols=30, rows_high=6)
+    check("좁은 창에서도 예외가 없다", "Traceback" not in narrow, narrow)
 
 
 def test_the_view_targets_the_marked_sessions():

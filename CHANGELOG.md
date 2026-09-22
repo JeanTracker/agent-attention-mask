@@ -15,6 +15,9 @@ The reasoning behind each judgement is recorded as a numbered entry in
   `↑`/`↓` pick one of the three timing values, `+`/`-` move it, `0` forgets it again and
   `enter` writes the file. `esc` leaves without writing. As before, the file governs new
   sessions only -- `d` in the list is still what pushes values into running ones (D-050).
+- **`?` in `--top` opens a key reference.** Every key with a sentence on what it does,
+  grouped by screen, plus what `cover`, `cover delay`, `idle threshold`, `hook stall` and
+  `stored defaults` mean. It scrolls, and `?` or `esc` puts it away again (D-051).
 
 ## [0.1.0] - 2026-09-22
 
