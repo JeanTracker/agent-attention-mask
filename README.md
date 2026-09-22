@@ -188,8 +188,12 @@ it is doing. `amask --top` is the view onto it, refreshed twice a second:
    24110  open     waiting·skip   20s    release-notes         draft the release notes
 *  24777  covered  working·idle?  8s     agent-attention-mask  run the whole suite
 defaults overlay_delay=8 -> applied to 2 sessions
-space mark  a all  enter detail  s skip  w wake  d defaults  c config  r poll  q quit
+space mark  a all  enter detail  s skip  w wake  d defaults  c config  r poll  ? keys  q quit
 ```
+
+`?` opens the key reference: every key with a sentence on what it does, grouped by screen,
+and what `cover`, `idle threshold` and `stored defaults` actually mean. The hint line at
+the bottom is the reminder; `?` is the explanation.
 
 Every column is as wide as what is actually in it, and the prompt takes what is left. `space`
 marks a session (`a` marks them all) and every command then applies to the marked ones: `s`
@@ -223,7 +227,7 @@ same commands work there and apply only to the session you are looking at.
   Hook stall    120s
 
   Prompt        add the config feature
-↑↓ scroll  esc/enter list  s skip  w wake  d defaults  c config  r poll  q quit
+↑↓ scroll  esc/enter list  s skip  w wake  d defaults  c config  r poll  ? keys  q quit
 ```
 
 `c` opens the stored defaults -- the same file `amask --config` writes, edited from the screen
@@ -241,7 +245,7 @@ that shows what those numbers are doing:
  > overlay_delay 9s        changed  shipped 4s    step 1
 
   Unsaved. Enter writes it, esc leaves it alone.
-↑↓ field  +/- change  0 shipped  enter save  esc back  q quit
+↑↓ field  +/- change  0 shipped  enter save  esc back  ? keys  q quit
 ```
 
 `↑`/`↓` pick a value, `+`/`-` move it, `0` forgets it again (the shipped default comes back),
