@@ -169,6 +169,9 @@ amask --config overlay_delay=8        # store one
 amask --config overlay_delay=         # forget it again
 ```
 
+`c` in `--top` edits the same file without leaving the screen that shows what the values are
+doing.
+
 Narrowest wins: the shipped default, then this file, then an env knob, then a session's own
 `set` over the socket. Changing the file does not reach sessions that are already running --
 `d` in `--top` is the deliberate act that does.
@@ -185,7 +188,7 @@ it is doing. `amask --top` is the view onto it, refreshed twice a second:
    24110  open     waiting·skip   20s    release-notes         draft the release notes
 *  24777  covered  working·idle?  8s     agent-attention-mask  run the whole suite
 defaults overlay_delay=8 -> applied to 2 sessions
-space mark  a all  enter detail  d default  s skip  w wake  +/- cover  [/] idle  r poll  q quit
+space mark  a all  enter detail  s skip  w wake  d defaults  c config  r poll  q quit
 ```
 
 Every column is as wide as what is actually in it, and the prompt takes what is left. `space`
@@ -194,7 +197,8 @@ skips their turn, `w` wakes them, `d` pushes the stored defaults into them, `+`/
 cover delay and `[`/`]` their idle threshold. With nothing marked, the highlighted row is the
 target.
 
-`enter` opens one session on its own screen -- session id, working directory, how long it has
+`c` opens the stored defaults for editing -- see below. `enter` opens one session on its own
+screen -- session id, working directory, how long it has
 been working, how much output is hidden, all three timing values and the prompt in full. The
 same commands work there and apply only to the session you are looking at.
 
@@ -219,8 +223,31 @@ same commands work there and apply only to the session you are looking at.
   Hook stall    120s
 
   Prompt        add the config feature
-↑↓ scroll  esc/enter list  s skip  w wake  +/- cover  [/] idle  d default  r poll  q quit
+↑↓ scroll  esc/enter list  s skip  w wake  d defaults  c config  r poll  q quit
 ```
+
+`c` opens the stored defaults -- the same file `amask --config` writes, edited from the screen
+that shows what those numbers are doing:
+
+```
+ amask  default settings  (unsaved)
+
+  The defaults a NEW session starts with. This writes the file only --
+  running sessions keep their own values, and `d` in the list pushes
+  these into the marked ones. File: ~/.amask/config.json
+
+   idle_silence  1.5s      shipped  shipped 1.5s  step 0.1
+   hook_stall    120s      shipped  shipped 120s  step 10
+ > overlay_delay 9s        changed  shipped 4s    step 1
+
+  Unsaved. Enter writes it, esc leaves it alone.
+↑↓ field  +/- change  0 shipped  enter save  esc back  q quit
+```
+
+`↑`/`↓` pick a value, `+`/`-` move it, `0` forgets it again (the shipped default comes back),
+`enter` writes the file and `esc` leaves without writing. Nothing else writes it, and what it
+writes governs new sessions only -- `d` back in the list is still what reaches the running
+ones.
 
 The same channel answers one question at a time, for scripts:
 

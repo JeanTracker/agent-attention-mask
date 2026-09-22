@@ -11,13 +11,16 @@ machine's interpreter), while `curses` is standard library. A separate native
 app remains possible -- it would speak the same socket -- and that is exactly
 why the protocol went in first.
 
-The view owns nothing. It polls `status`, draws what came back, and sends the
-same five commands a person could type. Anything it cannot reach is drawn as
-unreachable rather than retried, because a session that just exited is the
-ordinary case, not an error.
+The view owns nothing about a session. It polls `status`, draws what came
+back, and sends the same five commands a person could type. Anything it
+cannot reach is drawn as unreachable rather than retried, because a session
+that just exited is the ordinary case, not an error. The one thing it does
+write is the stored defaults file, and only when asked (`c`, then enter --
+D-050).
 """
 
 import curses
+import os
 import time
 import unicodedata
 
@@ -28,17 +31,22 @@ REFRESH = 0.5  # seconds between polls; the panel's own clock is 20fps
 
 # How much one keypress moves a timing value. Small enough to tune by feel,
 # large enough that holding the key is not the only way to get anywhere.
-STEP = {"overlay_delay": 1.0, "idle_silence": 0.1}
+STEP = {"overlay_delay": 1.0, "idle_silence": 0.1, "hook_stall": 10.0}
 
 # One line, and it has to fit: measured at 95 cells so a 96-column terminal
 # still shows the last key. Longer labels pushed `q quit` off the screen.
-HELP = ("space mark  a all  enter detail  d default  "
-        "s skip  w wake  +/- cover  [/] idle  r poll  q quit")
+HELP = ("space mark  a all  enter detail  s skip  w wake  d defaults  "
+        "c config  r poll  q quit")
 
 # The detail pane's own line. It has a whole screen, but the same 95-cell
 # budget applies -- a 96-column terminal must still show the last key.
-DETAIL_HELP = ("↑↓ scroll  esc/enter list  s skip  w wake  "
-               "+/- cover  [/] idle  d default  r poll  q quit")
+DETAIL_HELP = ("↑↓ scroll  esc/enter list  s skip  w wake  d defaults  "
+               "c config  r poll  q quit")
+
+# The editor's own line (D-050). Six keys with the whole screen to say them
+# in, so nothing here is abbreviated.
+CONFIG_HELP = ("↑↓ field  +/- change  0 shipped  enter save  esc back  "
+               "q quit")
 
 # What the runner reports in its own words, so a Korean screen does not show
 # the protocol's `busy`/`waiting` (D-044).
@@ -97,7 +105,8 @@ def action_for(key):
     """One keypress -> what to do. Pure, so the suite can check the table.
 
     Returns (kind, argument), where kind is one of "quit", "move", "mark",
-    "mark-all", "defaults", "cmd", "tune", "refresh", "detail" or None.
+    "mark-all", "defaults", "cmd", "tune", "refresh", "detail", "config"
+    or None.
     """
     if key in (ord("q"), ord("Q"), 27):
         return "quit", None
@@ -117,6 +126,8 @@ def action_for(key):
         return "mark-all", None
     if key in (ord("d"), ord("D")):
         return "defaults", None
+    if key in (ord("c"), ord("C")):
+        return "config", None
     if key in (ord("+"), ord("=")):
         return "tune", ("overlay_delay", STEP["overlay_delay"])
     if key in (ord("-"), ord("_")):
@@ -207,7 +218,7 @@ def detail_action_for(key):
     if key in (curses.KEY_END, ord("G")):
         return "scroll-edge", 1
     kind, argument = action_for(key)
-    if kind in ("cmd", "tune", "refresh", "defaults"):
+    if kind in ("cmd", "tune", "refresh", "defaults", "config"):
         return kind, argument
     return None, None
 
@@ -462,6 +473,182 @@ def default_settings():
     return config.merge(Settings.shipped())
 
 
+def _shipped():
+    """What the code itself says, with no file and no env -- the editor's
+    baseline and what `0` puts a field back to."""
+    from .cli import Settings
+
+    return Settings.shipped()
+
+
+# -- the stored defaults, edited in place (D-050) ----------------------------
+#
+# `d` pushes the stored defaults into running sessions, but until now the only
+# way to *change* them was `amask --config key=value` in another terminal --
+# from the one screen that shows what the values are doing, they were read
+# only. This is the same file `--config` writes, with the same validator, in
+# front of the same three keys.
+
+# The order the editor lists them in: the file's own order, so the screen and
+# `amask --config` cannot disagree about which key is which.
+CONFIG_FIELDS = config.KEYS
+
+# How many lines the editor spends before the first field. The draw uses it to
+# keep the cursor on screen in a short window (D-045).
+CONFIG_HEADER = 4
+
+
+def config_action_for(key):
+    """One keypress inside the defaults editor -> what to do. Pure.
+
+    Returns (kind, argument), kind one of "quit", "back", "field", "edit",
+    "clear", "save" or None.
+
+    `esc` leaves rather than quits, unlike the list: this screen is something
+    you stepped into, and the key that gets you out of a pane is the same one
+    the detail pane already uses (D-043). `q` still quits outright from
+    anywhere, which is the promise the help line has made since D-040.
+
+    Enter saves. Nothing else writes the file -- stepping a value is staged
+    and the title says so -- because a screen that wrote on every keypress
+    would leave a half-tuned number behind the moment you walked away.
+    """
+    if key in (ord("q"), ord("Q")):
+        return "quit", None
+    if key in (27, curses.KEY_BACKSPACE, 127, 8):
+        return "back", None
+    if key in _ENTER:
+        return "save", None
+    if key in (curses.KEY_DOWN, ord("j")):
+        return "field", 1
+    if key in (curses.KEY_UP, ord("k")):
+        return "field", -1
+    if key in (ord("+"), ord("="), curses.KEY_RIGHT, ord("l")):
+        return "edit", 1
+    if key in (ord("-"), ord("_"), curses.KEY_LEFT, ord("h")):
+        return "edit", -1
+    if key in (ord("0"), ord("x"), ord("X")):
+        return "clear", None
+    return None, None
+
+
+def stage_value(staged, field, direction, shipped):
+    """One `+`/`-` against the staged defaults. Pure; returns (staged, note).
+
+    A key with nothing stored starts from the shipped value rather than from
+    zero -- the first press should move the number that is on the screen.
+
+    The result is rounded to the millisecond: `idle_silence` steps by 0.1, and
+    binary floats otherwise turn 1.5 into 1.5000000000000002 and then write
+    that into the file.
+    """
+    from .cli import Settings
+
+    current = staged.get(field, shipped[field])
+    value = round(max(0.0, min(Settings.LIMIT, current + direction * STEP[field])), 3)
+    out = dict(staged)
+    out[field] = value
+    return out, f"{field} {value:g} -- not saved yet, enter saves"
+
+
+def clear_value(staged, field, shipped):
+    """`0`: forget the stored value, as `amask --config key=` does. Pure.
+
+    Not "set it to the shipped number": a stored value that happens to equal
+    the shipped one still pins it, and the point of this key is to stop
+    pinning it at all.
+    """
+    out = dict(staged)
+    out.pop(field, None)
+    return out, (f"{field} back to the shipped {shipped[field]:g}"
+                 " -- not saved yet, enter saves")
+
+
+def save_defaults(staged):
+    """Write the staged defaults. Returns (stored, message).
+
+    `stored` is None when nothing was written, and then the message says why
+    and the editor stays where it is -- `config.save` is allowed to fail out
+    loud, and a screen that swallowed that would be claiming a change the
+    next session will not see.
+
+    Validated by the same `Settings` object the socket and `--config` use, so
+    this screen cannot store a value a running session would refuse. Only the
+    keys still staged are written, so clearing the last one leaves an empty
+    file rather than a file full of the shipped values.
+    """
+    from .cli import Settings
+
+    probe = Settings(**Settings.shipped())
+    if staged:
+        error = probe.update(staged)
+        if error:
+            return None, f"refused: {error}"
+    try:
+        written = config.save({key: probe.as_dict()[key] for key in staged})
+    except OSError as exc:
+        return None, f"could not save: {exc}"
+    shown = " ".join(f"{k}={v:g}" for k, v in sorted(written.items()))
+    return written, (f"saved {shown or '(nothing stored)'}"
+                     " -- new sessions only; d pushes it into running ones")
+
+
+def config_lines(shipped, stored, staged, cursor, width=78):
+    """The editor's screen, as drawn lines. Pure, like `detail_lines`.
+
+    Three columns per field: what a new session would get, where that number
+    comes from, and what the code itself ships. The origin column is the one
+    that answers the question people actually arrive with -- "is this 4
+    seconds mine, or is it just what amask does?" -- and it is also where an
+    unsaved change announces itself.
+    """
+    out = [
+        "The defaults a NEW session starts with. This writes the file only --",
+        "running sessions keep their own values, and `d` in the list pushes",
+        f"these into the marked ones. File: {_short(config.path())}",
+        "",
+    ]
+    assert len(out) == CONFIG_HEADER
+    for index, field in enumerate(CONFIG_FIELDS):
+        value = staged.get(field, shipped[field])
+        if field in staged and staged[field] != stored.get(field):
+            origin = "changed"
+        elif field in staged:
+            origin = "stored"
+        elif field in stored:
+            origin = "cleared"
+        else:
+            origin = "shipped"
+        mark = ">" if index == cursor else " "
+        out.append(f" {mark} {_pad(field, 14)}{_pad(f'{value:g}s', 10)}"
+                   f"{_pad(origin, 9)}"
+                   f"{_pad(f'shipped {shipped[field]:g}s', 14)}"
+                   f"step {STEP[field]:g}")
+    out.append("")
+    if _unsaved(stored, staged):
+        out.append("Unsaved. Enter writes it, esc leaves it alone.")
+    else:
+        out.append("Nothing to save.")
+    out.append("")
+    out.append("An env knob on a session's own command line still wins over")
+    out.append("this file, and that session's own `set` wins over both.")
+    return [_clip(line, width) for line in out]
+
+
+def _short(path):
+    """`~/.amask/config.json` rather than the whole home directory: the line
+    is there to say which file, and the part that varies is the tail."""
+    home = os.path.expanduser("~")
+    if home and path.startswith(home + os.sep):
+        return "~" + path[len(home):]
+    return path
+
+
+def _unsaved(stored, staged):
+    """Whether the editor is holding a change the file does not have."""
+    return staged != stored
+
+
 def _poll():
     """Every session, with its status or the reason it could not be read."""
     rows = []
@@ -570,9 +757,45 @@ def _draw_detail(screen, row, message, offset=0):
 
     if message:
         _put(screen, height - 2, message)
-    _put(screen, height - 1, _pad(DETAIL_HELP, width - 1), curses.A_REVERSE)
+    _put(screen, height - 1, _pad(DETAIL_HELP, width - 1),
+         curses.A_REVERSE)
     screen.refresh()
     return offset
+
+
+def _draw_config(screen, shipped, stored, staged, cursor, message):
+    """The defaults editor, full screen (D-050).
+
+    Scrolled like the other two screens rather than cut off (D-045), but the
+    content is fixed, so instead of a scroll position it keeps the field the
+    cursor is on in view -- there is no gesture here that moves the body
+    without moving the cursor.
+    """
+    screen.erase()
+    height, width = screen.getmaxyx()
+    lines = config_lines(shipped, stored, staged, cursor,
+                         width=max(20, width - 3))
+    capacity = body_capacity(height)
+    start, end = visible_span(len(lines), CONFIG_HEADER + cursor, capacity)
+
+    title = " amask  default settings"
+    if _unsaved(stored, staged):
+        title += "  (unsaved)"
+    marker = more_marker(start, end, len(lines))
+    if marker:
+        title += f"  {marker}"
+    _put(screen, 0, _pad(title, width - 1), curses.A_REVERSE)
+
+    for index, line in enumerate(lines[start:end]):
+        attr = (curses.A_REVERSE if start + index == CONFIG_HEADER + cursor
+                else curses.A_NORMAL)
+        _put(screen, 2 + index, "  " + line, attr)
+
+    if message:
+        _put(screen, height - 2, message)
+    _put(screen, height - 1, _pad(CONFIG_HELP, width - 1),
+         curses.A_REVERSE)
+    screen.refresh()
 
 
 def _find(rows, pid):
@@ -590,6 +813,11 @@ def _loop(screen):
     marked = set()  # pids, not indices: the list reorders as sessions come and go
     viewing = None  # the pid whose detail pane is open, for the same reason
     offset = 0  # how far the detail pane is scrolled, in lines
+    editing = False  # whether the defaults editor is in front (D-050)
+    cursor = 0  # which of the three defaults it is on
+    stored = {}  # the file as it was read; staged is the edit in progress
+    staged = {}
+    shipped = _shipped()
     message = ""
     rows = _poll()
     last = time.monotonic()
@@ -598,7 +826,9 @@ def _loop(screen):
             selected = max(0, len(rows) - 1)
         live = {info.get("pid") for info, _, _ in rows}
         marked &= live  # a session that exited is no longer selected
-        if viewing is not None:
+        if editing:
+            _draw_config(screen, shipped, stored, staged, cursor, message)
+        elif viewing is not None:
             row = _find(rows, viewing)
             if row is None:
                 # The ordinary case, not an error: fall back to the list
@@ -607,7 +837,7 @@ def _loop(screen):
                 viewing = None
             else:
                 offset = _draw_detail(screen, row, message, offset)
-        if viewing is None:
+        if not editing and viewing is None:
             _draw(screen, rows, selected, marked, message)
 
         key = screen.getch()
@@ -615,6 +845,29 @@ def _loop(screen):
             # Which keys mean what, and what a command would apply to,
             # depend on the mode; what the commands then *do* does not, so
             # the two modes part company only over their own keys.
+            if editing:
+                # The editor talks to a file, not to a session, so it shares
+                # nothing with the other two beyond `q`. Its keys are handled
+                # here and the dispatch below is skipped entirely.
+                kind, argument = config_action_for(key)
+                if kind == "quit":
+                    return
+                if kind == "back":
+                    editing, message = False, ""
+                elif kind == "field":
+                    cursor = (cursor + argument) % len(CONFIG_FIELDS)
+                elif kind == "edit":
+                    staged, message = stage_value(
+                        staged, CONFIG_FIELDS[cursor], argument, shipped)
+                elif kind == "clear":
+                    staged, message = clear_value(
+                        staged, CONFIG_FIELDS[cursor], shipped)
+                elif kind == "save":
+                    written, message = save_defaults(staged)
+                    if written is not None:
+                        stored, staged = dict(written), dict(written)
+                continue
+
             if viewing is not None:
                 kind, argument = detail_action_for(key)
                 chosen = command_targets(rows, marked, selected, viewing)
@@ -623,6 +876,14 @@ def _loop(screen):
                 chosen = command_targets(rows, marked, selected, None)
             if kind == "quit":
                 return
+            if kind == "config":
+                # Read the file at the moment the screen opens, not at
+                # startup: `amask --config` in another terminal, or another
+                # `--top`, may have written it since.
+                stored = config.load()
+                staged, cursor = dict(stored), 0
+                editing, message = True, ""
+                continue
 
             if viewing is not None:
                 page = max(1, body_capacity(screen.getmaxyx()[0]) - 1)
