@@ -17,7 +17,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from harness import RUN_DIR, fixture, is_rain, run_in_pty
+from harness import RUN_DIR, budget, fixture, is_rain, run_in_pty
 from amask import control
 from amask.cli import Settings
 
@@ -349,7 +349,11 @@ def test_wake_over_the_socket_uncovers():
     check("wake 이전에 덮여 있었다 (전제)",
           any(is_rain(chunk) for t, chunk in res.timeline if t < 3.0),
           "덮이지 않아 이 케이스가 무의미하다")
-    quiet = [t for t, chunk in res.timeline if is_rain(chunk) and 3.1 < t < 3.9]
+    # The window opens once the uncover has had time to happen -- a frame
+    # still in flight when `wake` returns is not the runner refusing to
+    # uncover, and on a shared runner that flight takes longer (D-049).
+    quiet = [t for t, chunk in res.timeline
+             if is_rain(chunk) and 3.0 + budget(0.1) < t < 3.9]
     check("wake 직후에는 걷혀 있다", not quiet, f"t={quiet[0] if quiet else None}")
 
 

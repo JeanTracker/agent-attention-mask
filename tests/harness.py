@@ -30,6 +30,26 @@ FAST_TIMING = {
     "AMASK_IDLE_SILENCE": "0.6",
 }
 
+# How much slack the latency budgets get. 1.0 -- no slack at all -- is the
+# default and what a developer's machine runs, because SC-002's 0.2s is a
+# promise about the product and is not up for negotiation here.
+#
+# A shared CI runner is a different measurement. It is a virtual machine whose
+# CPU is shared with whatever else the provider has scheduled, and on it the
+# same code missed 0.2s by 68ms and took 120ms rather than under 100ms to
+# uncover. Reading that as a regression would mean the suite reports the
+# runner's scheduling rather than the runner's behaviour; reading it as a pass
+# by lowering the number would let a real regression through on the machine
+# that matters. So the number stays and CI declares that its clock is loose
+# (D-049).
+SLACK = max(1.0, float(os.environ.get("AMASK_TEST_SLACK", "1.0") or 1.0))
+
+
+def budget(seconds):
+    """A latency budget, widened by SLACK on a machine that asked for it."""
+    return seconds * SLACK
+
+
 # Every runner started by the suite publishes its control socket here instead
 # of in the user's `~/.amask/run` (D-039). Sessions are keyed by pid, so one
 # directory for the whole suite is enough.

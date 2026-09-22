@@ -31,4 +31,9 @@ jobs:
       # No install step and no cache: amask is standard library only (D-006),
       # so there is nothing to resolve.
       - name: Run the phase suites
+        # The latency budgets keep their numbers; the runner declares that its
+        # clock is shared, and only the budgets widen (D-049). A developer's
+        # machine runs with no slack at all.
+        env:
+          AMASK_TEST_SLACK: "3"
         run: python3 tests/run_all.py

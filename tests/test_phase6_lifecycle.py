@@ -12,7 +12,7 @@ shipped defaults.
 import re
 import sys
 
-from harness import fixture, is_rain, run_in_pty
+from harness import budget, fixture, is_rain, run_in_pty
 
 ALT_ENTER = b"\x1b[?1049h"
 ALT_EXIT = b"\x1b[?1049l"
@@ -210,7 +210,7 @@ def test_tui_agent_is_repainted_after_the_overlay_lifts():
     check("작업 도중 깨워도 TUI가 다시 그려짐", repaint is not None, "재렌더링 없음")
     check(
         "SC-002 재렌더링까지 0.2초 이내",
-        repaint is not None and (repaint - 5.0) < 0.2,
+        repaint is not None and (repaint - 5.0) < budget(0.2),
         f"{repaint - 5.0:.3f}s" if repaint else "없음",
     )
 

@@ -12,9 +12,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from harness import fixture, is_rain, run_in_pty
+from harness import budget, fixture, is_rain, run_in_pty
 from amask.term import TerminalController
 
+# Named, not inlined: a 3.11 f-string cannot carry a backslash inside the
+# expression part, and these appear in failure details.
+ED2 = b"\x1b[2J"
 ALT_ENTER = b"\x1b[?1049h"
 ALT_EXIT = b"\x1b[?1049l"
 SENTINEL = b"AGENT-OUTPUT-SENTINEL"
@@ -91,7 +94,7 @@ def test_manual_wake_is_fast():
     res = run_in_pty(fixture("chatty.py", 5), feed=[(2.0, b" ")], timeout=20)
     fed = res.feeds[0][0] if res.feeds else None
     woke = next((t for t, chunk in res.timeline if ALT_EXIT in chunk and fed and t > fed), None)
-    ok = fed is not None and woke is not None and (woke - fed) < 0.2
+    ok = fed is not None and woke is not None and (woke - fed) < budget(0.2)
     check("SC-002 키 입력 후 0.2초 이내 복귀", ok, f"fed={fed} woke={woke}")
 
 
@@ -154,9 +157,9 @@ def test_the_overlay_never_sends_ed2():
         term.enter_overlay(take_alt=take_alt)
         covered = len(term.out)
         term.exit_overlay()
+        ed2 = term.out.count(ED2)
         check(f"P-103 오버레이 구간에 ED 2 없음 ({name})",
-              b"\x1b[2J" not in term.out,
-              f"ED 2 {term.out.count(b'\x1b[2J')}회")
+              ED2 not in term.out, f"ED 2 {ed2}회")
         check(f"화면은 여전히 지워진다 ({name})",
               b"\x1b[2K" in term.out[:covered], "지우는 시퀀스가 없다")
 
@@ -168,7 +171,7 @@ def test_the_overlay_never_sends_ed2():
     window = res.data[enter:leave] if 0 <= enter < leave else b""
     check("실제 실행에서도 오버레이 구간에 ED 2 없음",
           enter >= 0 and b"\x1b[2J" not in window,
-          f"ED 2 {window.count(b'\x1b[2J')}회" if enter >= 0 else "1049h 없음")
+          f"ED 2 {window.count(ED2)}회" if enter >= 0 else "1049h 없음")
 
 
 if __name__ == "__main__":
