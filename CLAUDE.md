@@ -60,6 +60,6 @@ agent's timing or hook payloads, build the observations first with `tests/tap_ag
 `claude -p --permission-mode auto` and update `PROJECT_STATE.md`. Do not run it unless the
 user explicitly asks.
 
-If you changed a constant's default in the code, fix the numbers written in README's "Timing"
-section to match. Those constants are the three defined with `_seconds(...)` in
+If you changed a constant's default in the code, fix the numbers written in README's
+"Configuration" table to match. Those constants are the three defined with `_seconds(...)` in
 `amask/cli.py`: `IDLE_SILENCE`, `HOOK_STALL` and `OVERLAY_DELAY`.

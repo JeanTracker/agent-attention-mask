@@ -61,7 +61,7 @@ python3 tests/probe_hooks.py --interrupt 12 "Write 800 words about rain"
 Take changing a single timing constant as the example — say you adjust the 1.5 s default of
 `AMASK_IDLE_SILENCE`. The constant is `IDLE_SILENCE` in `amask/cli.py`, and fixing only that
 leaves three places out of step.
-README's "Timing" section writes the default out as a number, and the value 1.5 s is itself
+README's "Configuration" table writes the default out as a number, and the value 1.5 s is itself
 the conclusion of D-023.
 
 So the order is code → the README default → a new D entry in `DECISIONS.md`. Existing D

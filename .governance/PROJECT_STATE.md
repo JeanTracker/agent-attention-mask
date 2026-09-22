@@ -281,3 +281,13 @@
 - `column_widths`로 그려질 행을 먼저 만들어 열마다 실제 최대 폭을 잡고, 자리가 모자라면 바닥에서 가장 먼 열부터 깎는다. 프롬프트에는 16셀을 항상 남긴다.
 - 화면 밖으로 밀려난 행은 애초에 재지 않는다(`visible_span` 뒤에서 잰다) — 보이지 않는 세션의 긴 폴더 이름 때문에 보이는 열이 좁아지면 안 된다.
 - **검증 (2026-09-21)**: `python3 tests/run_all.py`에서 `test_phase3_overlay.py` 한 스위트가 실패로 잡혔으나 단독 재실행에서 **전부 통과** — 다른 세션이 같은 워킹트리에서 pty 스위트를 동시에 돌리던 시간대라 경합이다(오버레이 스위트는 `top.py`를 건드리지 않는다). 나머지 8개 페이즈와 `test_phase10_control.py`는 그 실행에서 전부 통과했다.
+
+## 오픈소스 공개 준비 — 영어화·CI·v0.1.0·리팩터링 (2026-09-22)
+- 사용자 지시 묶음: 리팩터링 진행(사이드 판단 + 필요하면 유닛테스트), 커밋 이력 재작성(이름 `JeanTracker`, 이메일 `hyojoong.kim.jean@gmail.com`, 메시지 영어, 포스 푸시), README 오픈소스화, `--top` 표기 영어, CI 추가, v0.1.0.
+- **리팩터링(사이드 없음으로 판단)**: `_loop`의 상세/목록 두 분기가 `refresh`·`defaults`·`cmd`·`tune`을 각자 복사해 갖고 있었다. 상세 쪽 `row is not None` 가드는 도달 불가다 — `viewing`은 같은 반복 앞부분에서 같은 `rows`로 검증되고 그 사이 `rows`가 움직이지 않는다. `command_targets(rows, marked, selected, viewing)`로 모드를 질문에 접어 넣어 공통 디스패치 하나로 합쳤다. 빈 목록에서 `d`가 내는 문구까지 동작이 같다.
+  - 새 유닛테스트 2건: `command_targets`(목록은 표시 우선, 상세는 표시 무시, 끝난 세션은 대상 없음)와 `_state_name`(모르는 프로토콜 값은 그대로, 폴백 우선순위). `_loop` 자체는 curses가 필요해 단위로 못 잡으므로, 판단이 들어간 부분을 순수 함수로 꺼내 그것을 잡았다.
+- **영어화(D-047)**: `top.py` 전량과 `cli.py`의 `USAGE`·모든 `print`. 프로토콜 문자열과 `.governance/`, 테스트 `check` 라벨은 범위 밖. 도움줄이 98셀이 되어 `defaults`→`default`, `reload`→`poll`로 95셀에 맞췄고, `MIN_WIDTH`/`MAX_WIDTH`도 영어 머리글 폭으로 고쳤다(`Screen` 6셀이 천장 4에 걸려 잘렸다).
+- **CI(D-048)**: `.github/workflows/ci.yml` — ubuntu·macOS × 3.11/3.12/3.13, `fail-fast: false`, 30분 타임아웃. **Linux에서 돌려본 적이 없다**는 것이 이 항목의 열린 위험이다.
+- **v0.1.0**: `__version__`은 이미 있었고 `--version`/`-V` 플래그와 `CHANGELOG.md`(Keep a Changelog)를 추가했다. 태그는 사용자 확인 후.
+- **README**: 438줄 → 279줄. 남긴 것은 설치·사용·동작·설정·`--top`·iTerm2·제거·개발. 뺀 것은 모듈 목록(CONTRIBUTING로), 계측 도구 설명, 스위트↔SC 대응표, 패널 렌더링 세부(폭 공식·카타카나 근거·행 생략 규칙) — 전부 `.governance/`나 CONTRIBUTING에 이미 있는 내용이다. CI 배지와 CHANGELOG 링크를 넣었고, 라이선스는 고르지 않았다고 명시했다(선택은 사용자 몫).
+- CLAUDE.md·CONTRIBUTING.md의 "README의 Timing 절" 참조를 "Configuration 표"로 고쳤다 — 절 이름이 바뀌었으므로 그 지침이 가리키는 곳도 같이 옮겨야 한다.
