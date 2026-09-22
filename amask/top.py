@@ -235,14 +235,20 @@ def describe(status):
     )
 
 
-def _state_name(status):
-    """`busy`/`waiting` in the screen's own language, with the flags on it."""
+def _state_name(status, unknown=None):
+    """`busy`/`waiting` in the screen's own language (D-044).
+
+    A value the table does not know is shown as it came, rather than as a
+    blank: the hook protocol may grow a state before this view does.
+    `unknown` is what to say when the runner reports no state at all --
+    the row guesses from `busy`, the detail pane has room to explain.
+    """
     raw = status.get("hook_state")
     if raw:
-        state = STATE_NAMES.get(raw, str(raw))
-    else:
-        state = "작업" if status.get("busy") else "대기"
-    return state
+        return STATE_NAMES.get(raw, str(raw))
+    if unknown is not None:
+        return unknown
+    return "작업" if status.get("busy") else "대기"
 
 
 def _folder(cwd):
@@ -294,11 +300,8 @@ def detail_lines(info, status, problem=None, width=78):
 
     field("화면", "덮임 (레인이 올라가 있다)" if status.get("covered")
            else "열림 (에이전트 화면이 보인다)")
-    raw = status.get("hook_state")
-    state = (STATE_NAMES.get(raw, str(raw)) if raw else
-             ("알 수 없음" if status.get("hooks")
-              else "훅 없음 -- 시간 추정으로 판단 중"))
-    field("상태", state)
+    field("상태", _state_name(status, "알 수 없음" if status.get("hooks")
+                              else "훅 없음 -- 시간 추정으로 판단 중"))
     field("작업 시간", f"{status.get('busy_seconds', 0.0):.1f}s"
           if status.get("busy") else "작업 중이 아니다")
     notes = []
@@ -429,6 +432,25 @@ def targets(rows, marked, selected):
     if not rows:
         return []
     return [rows[min(selected, len(rows) - 1)]]
+
+
+def command_targets(rows, marked, selected, viewing):
+    """The same question with the mode folded in. Pure.
+
+    The detail pane's rule is the other half of D-043: what the screen is
+    showing is what the key reaches, marks or no marks. Keeping both halves
+    in one function is what lets the loop run a single dispatch -- the modes
+    differ over which keys exist, not over what a command then does.
+
+    A `viewing` pid that is no longer in `rows` yields no target. The loop
+    cannot reach that case (it drops back to the list first), but a caller
+    that asks about a session which just exited gets an empty list rather
+    than an exception.
+    """
+    if viewing is None:
+        return targets(rows, marked, selected)
+    row = _find(rows, viewing)
+    return [row] if row is not None else []
 
 
 def default_settings():
@@ -587,50 +609,47 @@ def _loop(screen):
             _draw(screen, rows, selected, marked, message)
 
         key = screen.getch()
-        if key != -1 and viewing is not None:
-            kind, argument = detail_action_for(key)
-            row = _find(rows, viewing)
-            if kind == "quit":
-                return
-            page = max(1, body_capacity(screen.getmaxyx()[0]) - 1)
-            if kind == "list":
-                viewing, message = None, ""
-            elif kind == "scroll":
-                offset = max(0, offset + argument)
-            elif kind == "scroll-page":
-                offset = max(0, offset + argument * page)
-            elif kind == "scroll-edge":
-                offset = 0 if argument < 0 else 10 ** 6  # clamped on draw
-            elif kind == "refresh":
-                rows, last, message = _poll(), time.monotonic(), ""
-            elif kind == "defaults" and row is not None:
-                message = _apply_defaults([row])
-                rows, last = _poll(), time.monotonic()
-            elif kind in ("cmd", "tune") and row is not None:
-                message = _apply([row], kind, argument)
-                rows, last = _poll(), time.monotonic()
-            continue
         if key != -1:
-            kind, argument = action_for(key)
+            # Which keys mean what, and what a command would apply to,
+            # depend on the mode; what the commands then *do* does not, so
+            # the two modes part company only over their own keys.
+            if viewing is not None:
+                kind, argument = detail_action_for(key)
+                chosen = command_targets(rows, marked, selected, viewing)
+            else:
+                kind, argument = action_for(key)
+                chosen = command_targets(rows, marked, selected, None)
             if kind == "quit":
                 return
-            if kind == "detail" and rows:
-                viewing, message, offset = rows[selected][0].get("pid"), "", 0
-            elif kind == "move" and rows:
-                selected = (selected + argument) % len(rows)
-            elif kind == "mark" and rows:
-                pid = rows[selected][0].get("pid")
-                marked.symmetric_difference_update({pid})
-                selected = (selected + 1) % len(rows)
-            elif kind == "mark-all":
-                marked = set() if marked == live else set(live)
-            elif kind == "refresh":
+
+            if viewing is not None:
+                page = max(1, body_capacity(screen.getmaxyx()[0]) - 1)
+                if kind == "list":
+                    viewing, message = None, ""
+                elif kind == "scroll":
+                    offset = max(0, offset + argument)
+                elif kind == "scroll-page":
+                    offset = max(0, offset + argument * page)
+                elif kind == "scroll-edge":
+                    offset = 0 if argument < 0 else 10 ** 6  # clamped on draw
+            else:
+                if kind == "detail" and rows:
+                    viewing, message, offset = rows[selected][0].get("pid"), "", 0
+                elif kind == "move" and rows:
+                    selected = (selected + argument) % len(rows)
+                elif kind == "mark" and rows:
+                    pid = rows[selected][0].get("pid")
+                    marked.symmetric_difference_update({pid})
+                    selected = (selected + 1) % len(rows)
+                elif kind == "mark-all":
+                    marked = set() if marked == live else set(live)
+
+            if kind == "refresh":
                 rows, last, message = _poll(), time.monotonic(), ""
             elif kind == "defaults":
-                message = _apply_defaults(targets(rows, marked, selected))
+                message = _apply_defaults(chosen)
                 rows, last = _poll(), time.monotonic()
-            elif kind in ("cmd", "tune") and rows:
-                chosen = targets(rows, marked, selected)
+            elif kind in ("cmd", "tune") and chosen:
                 message = _apply(chosen, kind, argument)
                 rows, last = _poll(), time.monotonic()
             continue

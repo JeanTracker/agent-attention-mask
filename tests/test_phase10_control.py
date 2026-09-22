@@ -733,7 +733,6 @@ def test_the_short_window_frames_show_what_is_hidden():
     check("내용을 벗어나 비지 않는다", "훅 정체" in scrolled, scrolled)
     check("예외가 새지 않았다", "Traceback" not in scrolled, scrolled)
 
-    many = [dict(TOP_SAMPLE[0]) for _ in range(12)]
     many = [{"info": {"pid": 1000 + i},
              "status": dict(TOP_SAMPLE[0]["status"], pid=1000 + i,
                             prompt=f"요청 {i}")} for i in range(12)]
@@ -744,6 +743,48 @@ def test_the_short_window_frames_show_what_is_hidden():
     check("커서를 끝으로 옮기면 그 행이 보인다", "1011" in bottom, bottom)
     check("목록도 위에 더 있다고 알려준다", "↑" in bottom, bottom)
     check("목록 스크롤에도 예외가 없다", "Traceback" not in bottom, bottom)
+
+
+def test_a_command_applies_to_the_mode_you_are_in():
+    """목록은 표시(mark)를, 상세는 보고 있는 세션을 대상으로 한다 (D-041·D-043)."""
+    from amask import top
+
+    rows = [({"pid": 1}, {"pid": 1}, None),
+            ({"pid": 2}, {"pid": 2}, None),
+            ({"pid": 3}, {"pid": 3}, None)]
+
+    check("목록에서는 표시된 것 전부",
+          top.command_targets(rows, {1, 3}, 1, None) == [rows[0], rows[2]])
+    check("표시가 없으면 커서가 있는 하나",
+          top.command_targets(rows, set(), 1, None) == [rows[1]])
+    check("목록 규칙은 targets 그대로",
+          top.command_targets(rows, {2}, 0, None) == top.targets(rows, {2}, 0))
+    check("상세에서는 보고 있는 세션 하나",
+          top.command_targets(rows, set(), 0, 3) == [rows[2]])
+    check("상세에서는 표시를 무시한다",
+          top.command_targets(rows, {1, 2}, 0, 3) == [rows[2]],
+          str(top.command_targets(rows, {1, 2}, 0, 3)))
+    check("끝난 세션을 보고 있으면 대상이 없다",
+          top.command_targets(rows, {1}, 0, 99) == [])
+    check("세션이 없으면 대상도 없다",
+          top.command_targets([], set(), 0, None) == [])
+
+
+def test_the_state_name_says_it_in_one_place():
+    """행과 상세가 같은 표를 쓰고 폴백만 다르다 (D-044)."""
+    from amask import top
+
+    check("busy", top._state_name({"hook_state": "busy"}) == "작업")
+    check("waiting", top._state_name({"hook_state": "waiting"}) == "대기")
+    check("모르는 값은 그대로",
+          top._state_name({"hook_state": "compacting"}) == "compacting")
+    check("상태가 없으면 행은 busy로 넘겨짚는다",
+          top._state_name({"busy": True}) == "작업"
+          and top._state_name({"busy": False}) == "대기")
+    check("폴백을 주면 그것을 쓴다",
+          top._state_name({"busy": True}, "알 수 없음") == "알 수 없음")
+    check("폴백이 있어도 아는 값이 우선",
+          top._state_name({"hook_state": "busy"}, "알 수 없음") == "작업")
 
 
 def test_the_columns_are_as_wide_as_what_is_in_them():
