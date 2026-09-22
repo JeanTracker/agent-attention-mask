@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from harness import fixture, is_rain, run_in_pty
 
+ALT_ENTER = b"\x1b[?1049h"
 ALT_EXIT = b"\x1b[?1049l"
 SENTINEL = b"IDLE-SENTINEL"
 
@@ -69,10 +70,37 @@ def test_silent_agent_counts_as_working():
     check("종료 전까지 계속 덮여 있음", woke is not None and woke > 2.5, f"woke={woke}")
 
 
+def normal_buffer(data):
+    """Everything outside the alternate screen -- the user's own scrollback.
+
+    Not "after the last exit": the agent's tick loop can stutter past the
+    idle threshold, which breaks the stretch of work and ends that overlay
+    exactly as specified. The output is flushed then, and the runner covers
+    again afterwards, so a marker can legitimately land in an earlier flush.
+    What SC-004 promises is that it reaches the normal buffer, not which
+    flush carries it.
+    """
+    out = bytearray()
+    rest = data
+    while True:
+        start = rest.find(ALT_ENTER)
+        if start < 0:
+            out += rest
+            return bytes(out)
+        out += rest[:start]
+        end = rest.find(ALT_EXIT, start)
+        if end < 0:
+            return bytes(out)
+        rest = rest[end + len(ALT_EXIT):]
+
+
 def test_log_is_still_complete_after_an_idle_wake():
     res = run_in_pty(fixture("chatty.py", 2.0, 1.8, SENTINEL.decode()), timeout=20)
-    tail = res.data[res.data.rfind(ALT_EXIT):]
-    check("SC-004 유휴 복귀 시에도 로그 보존", SENTINEL in tail, repr(tail[:120]))
+    restored = normal_buffer(res.data)
+    check("SC-004 유휴 복귀 시에도 로그 보존", SENTINEL in restored,
+          repr(restored[-120:]))
+    check("SC-004 중복 없이 한 번만", restored.count(SENTINEL) == 1,
+          f"{restored.count(SENTINEL)}회")
 
 
 def test_idle_threshold_is_tunable():
