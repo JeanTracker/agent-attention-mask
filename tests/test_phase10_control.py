@@ -498,8 +498,9 @@ def test_the_key_table_is_what_the_help_line_promises():
           and top.action_for(ord("["))[1][1] < 0)
     check("모르는 키는 아무것도 하지 않는다",
           top.action_for(ord("z")) == (None, None))
-    for label in ("s ", "w ", "q ", "r "):
-        check(f"도움줄에 {label.strip()} 키가 적혀 있다", label in top.HELP, top.HELP)
+    bar = top.hint_text(top.LIST_HINTS, 95)
+    for label in ("(s)", "(w)", "(q)"):
+        check(f"도움줄에 {label} 키가 적혀 있다", label in bar, bar)
 
 
 def test_a_row_says_what_the_session_is_doing():
@@ -529,6 +530,13 @@ def test_a_row_says_what_the_session_is_doing():
     check("훅이 없으면 그렇게 적는다", "no hooks" in waiting[2], str(waiting))
     check("폴더를 모르면 -", waiting[4] == "-", str(waiting))
     check("프롬프트가 없으면 -", waiting[5] == "-", str(waiting))
+
+
+def check_quiet(condition, detail=""):
+    """Like `check`, but only says anything when it fails -- for sweeps that
+    would otherwise print a hundred identical PASS lines."""
+    if not condition:
+        check("도움줄이 창 폭 안에 들어간다", False, detail)
 
 
 def _render(rows, selected=0, message="", rows_high=12, cols=116, marked=(),
@@ -601,7 +609,7 @@ def test_the_frame_shows_every_session_and_the_keys():
     check("닿지 않는 세션은 그렇게 그린다",
           "unreachable" in screen and "claude --resume" in screen, screen)
     check("마지막 응답이 보인다", "applied: overlay_delay=8" in screen, screen)
-    check("키 안내가 마지막 줄에 있다", "q quit" in screen, screen)
+    check("키 안내가 마지막 줄에 있다", "quit(q)" in screen, screen)
     check("예외가 새지 않았다", "Traceback" not in screen, screen)
 
 
@@ -633,14 +641,14 @@ def test_enter_opens_a_detail_pane_and_the_keys_change_there():
     check("상세에서 space는 표시가 아니라 한 쪽 넘기기",
           top.detail_action_for(ord(" ")) == ("scroll-page", 1),
           str(top.detail_action_for(ord(" "))))
-    for label in ("enter ", "esc/enter ", "q "):
-        check(f"도움줄에 {label.strip()} 안내가 있다",
-              label in top.HELP or label in top.DETAIL_HELP,
-              top.HELP + " | " + top.DETAIL_HELP)
-    check("목록 도움줄이 95칸을 넘지 않는다", top._width(top.HELP) <= 95,
-          str(top._width(top.HELP)))
-    check("상세 도움줄이 95칸을 넘지 않는다", top._width(top.DETAIL_HELP) <= 95,
-          str(top._width(top.DETAIL_HELP)))
+    both = (top.hint_text(top.LIST_HINTS, 95) + " | "
+            + top.hint_text(top.DETAIL_HINTS, 95))
+    for label in ("open(enter)", "back(esc)", "quit(q)"):
+        check(f"도움줄에 {label} 안내가 있다", label in both, both)
+    for name, groups in (("목록", top.LIST_HINTS), ("상세", top.DETAIL_HINTS)):
+        check(f"{name} 도움줄이 95칸을 넘지 않는다",
+              top._width(top.hint_text(groups, 95)) <= 95,
+              top.hint_text(groups, 95))
 
 
 def test_the_detail_pane_says_what_the_row_had_no_room_for():
@@ -683,7 +691,8 @@ def test_the_detail_frame_draws_in_a_real_terminal():
     check("요청 전문이 보인다", "레인 색을 고쳐줘" in screen, screen)
     check("설정이 보인다", "Cover delay" in screen and "Idle silence" in screen, screen)
     check("마지막 응답이 보인다", "applied: overlay_delay=8" in screen, screen)
-    check("상세 키 안내가 있다", "list" in screen and "q quit" in screen, screen)
+    check("상세 키 안내가 있다", "back(esc)" in screen and "quit(q)" in screen,
+          screen)
     check("예외가 새지 않았다", "Traceback" not in screen, screen)
 
     unreachable = _render(TOP_SAMPLE, detail=24999, rows_high=24, cols=100)
@@ -726,17 +735,17 @@ def test_a_short_window_scrolls_instead_of_cutting_off():
     check("상세에서 space는 한 쪽 아래",
           top.detail_action_for(ord(" ")) == ("scroll-page", 1))
     check("상세에서 G는 끝으로", top.detail_action_for(ord("G")) == ("scroll-edge", 1))
-    check("상세 도움줄에 스크롤이 적혀 있다", "scroll" in top.DETAIL_HELP,
-          top.DETAIL_HELP)
-    check("상세 도움줄이 95칸을 넘지 않는다", top._width(top.DETAIL_HELP) <= 95,
-          str(top._width(top.DETAIL_HELP)))
+    detail_bar = top.hint_text(top.DETAIL_HINTS, 95)
+    check("상세 도움줄에 스크롤이 적혀 있다", "scroll(" in detail_bar, detail_bar)
+    check("상세 도움줄이 95칸을 넘지 않는다", top._width(detail_bar) <= 95,
+          detail_bar)
 
 
 def test_the_short_window_frames_show_what_is_hidden():
     short = _render(TOP_SAMPLE, detail=23875, rows_high=8, cols=90)
     check("짧은 창에서는 첫 줄부터 보인다", "PID" in short and "23875" in short, short)
     check("아래에 더 있다고 알려준다", "↓" in short, short)
-    check("키 안내는 그대로 있다", "list" in short, short)
+    check("키 안내는 그대로 있다", "back(esc)" in short, short)
 
     scrolled = _render(TOP_SAMPLE, detail=23875, rows_high=8, cols=90, offset=99)
     check("끝까지 내리면 요청이 보인다", "레인 색을 고쳐줘" in scrolled, scrolled)
@@ -1006,16 +1015,17 @@ def test_the_editor_has_its_own_key_table_and_says_so():
     check("0은 코드 기본값으로", top.config_action_for(ord("0")) == ("clear", None))
     check("모르는 키는 아무것도 하지 않는다",
           top.config_action_for(ord("z")) == (None, None))
-    for label in ("c config",):
-        check(f"두 도움줄 모두 {label}를 약속한다",
-              label in top.HELP and label in top.DETAIL_HELP,
-              top.HELP + " | " + top.DETAIL_HELP)
-    for label in ("save", "esc back", "0 shipped"):
-        check(f"편집 도움줄에 {label}가 있다", label in top.CONFIG_HELP,
-              top.CONFIG_HELP)
-    widths = [top._width(line) for line in (top.HELP, top.DETAIL_HELP,
-                                            top.CONFIG_HELP, top.KEYS_HELP)]
-    check("네 도움줄 모두 95칸을 넘지 않는다", max(widths) <= 95, str(widths))
+    for name, groups in (("목록", top.LIST_HINTS), ("상세", top.DETAIL_HINTS)):
+        bar = top.hint_text(groups, 95)
+        check(f"{name} 도움줄이 config(c)를 약속한다", "config(c)" in bar, bar)
+    editor = top.hint_text(top.CONFIG_HINTS, 95)
+    for label in ("save(enter)", "back(esc)", "shipped(0)", "change(+/-)"):
+        check(f"편집 도움줄에 {label}가 있다", label in editor, editor)
+    bars = [top.hint_text(groups, 95) for groups in
+            (top.LIST_HINTS, top.DETAIL_HINTS, top.CONFIG_HINTS,
+             top.KEYS_HINTS)]
+    check("네 도움줄 모두 95칸을 넘지 않는다",
+          max(top._width(bar) for bar in bars) <= 95, str(bars))
     check("세 값 모두 한 번에 얼마씩 움직일지 정해져 있다",
           set(top.STEP) == set(top.CONFIG_FIELDS), str(top.STEP))
 
@@ -1109,7 +1119,7 @@ def test_the_editor_frame_draws_in_a_real_terminal():
           all(key in screen for key in ("idle_silence", "hook_stall",
                                         "overlay_delay")), screen)
     check("마지막 응답이 보인다", "not saved yet" in screen, screen)
-    check("키 안내가 마지막 줄에 있다", "esc back" in screen, screen)
+    check("키 안내가 마지막 줄에 있다", "back(esc)" in screen, screen)
     check("예외가 새지 않았다", "Traceback" not in screen, screen)
 
     narrow = _render([], config_screen=True, cols=24, rows_high=6)
@@ -1138,10 +1148,12 @@ def test_every_screen_opens_the_key_reference_with_the_same_key():
           and top.keys_action_for(ord("G")) == ("scroll-edge", 1))
     check("모르는 키는 아무것도 하지 않는다",
           top.keys_action_for(ord("z")) == (None, None))
-    for line in (top.HELP, top.DETAIL_HELP, top.CONFIG_HELP):
-        check("세 도움줄 모두 ? 를 가리킨다", "? keys" in line, line)
+    for groups in (top.LIST_HINTS, top.DETAIL_HINTS, top.CONFIG_HINTS):
+        bar = top.hint_text(groups, 95)
+        check("세 도움줄 모두 ? 를 가리킨다", "help(?)" in bar, bar)
+    reference = top.hint_text(top.KEYS_HINTS, 95)
     check("도움말 화면은 나가는 법만 적는다",
-          "back" in top.KEYS_HELP and "q quit" in top.KEYS_HELP, top.KEYS_HELP)
+          "back(esc)" in reference and "quit(q)" in reference, reference)
 
 
 def test_the_key_reference_explains_the_keys_in_sentences():
@@ -1172,7 +1184,7 @@ def test_the_key_reference_draws_and_scrolls_in_a_real_terminal():
     check("제목이 keys라고 말한다", "amask  keys" in screen, screen)
     check("첫 묶음이 보인다", "On the list" in screen, screen)
     check("남은 줄 수를 제목에 적는다", "↓" in screen, screen)
-    check("나가는 법이 마지막 줄에 있다", "esc/enter back" in screen, screen)
+    check("나가는 법이 마지막 줄에 있다", "back(esc)" in screen, screen)
     check("예외가 새지 않았다", "Traceback" not in screen, screen)
 
     scrolled = _render([], keys_screen=True, offset=10 ** 6)
@@ -1185,6 +1197,66 @@ def test_the_key_reference_draws_and_scrolls_in_a_real_terminal():
           title)
 
     narrow = _render([], keys_screen=True, cols=30, rows_high=6)
+    check("좁은 창에서도 예외가 없다", "Traceback" not in narrow, narrow)
+
+
+# -- the hint bar, laid out for the window it is in (D-052) -----------------
+
+
+def test_the_hint_bar_says_what_a_key_does_and_marks_the_key():
+    from amask import top
+
+    bar = top.hint_bar(top.LIST_HINTS, 95)
+    text = "".join(piece for piece, _ in bar)
+    check("설명이 앞, 키가 괄호 안", "skip(s)" in text and "wake(w)" in text, text)
+    check("키만 강조 대상으로 표시된다",
+          [piece for piece, is_key in bar if is_key][:2] == ["space", "enter"]
+          or "s" in [piece for piece, is_key in bar if is_key],
+          str([piece for piece, is_key in bar if is_key]))
+    check("괄호와 설명은 강조하지 않는다",
+          all(not is_key for piece, is_key in bar if "(" in piece), str(bar))
+    check("역할별로 묶는다", "│" in text, text)
+
+
+def test_the_hint_bar_is_laid_out_for_the_window_it_is_in():
+    from amask import top
+
+    for groups in (top.LIST_HINTS, top.DETAIL_HINTS, top.CONFIG_HINTS,
+                   top.KEYS_HINTS):
+        for width in range(20, 200):
+            bar = top.hint_text(groups, width)
+            check_quiet(top._width(bar) + 2 <= width or width < 60,
+                        f"{width}칸에서 넘쳤다: {bar}")
+
+    check("넓은 창에서는 풀어서 쓴다",
+          "skip turn(s)" in top.hint_text(top.LIST_HINTS, 160),
+          top.hint_text(top.LIST_HINTS, 160))
+    check("보통 창에서는 줄여서 더 많은 키를 보여준다",
+          "skip(s)" in top.hint_text(top.LIST_HINTS, 100)
+          and "config(c)" in top.hint_text(top.LIST_HINTS, 100),
+          top.hint_text(top.LIST_HINTS, 100))
+    narrow = top.hint_text(top.LIST_HINTS, 50)
+    check("좁은 창에서는 덜 쓰는 키부터 버린다",
+          "cover" not in narrow and "all(a)" not in narrow, narrow)
+    for groups, must in ((top.LIST_HINTS, ("skip(s)", "wake(w)", "help(?)",
+                                           "quit(q)")),
+                         (top.CONFIG_HINTS, ("save(enter)", "back(esc)",
+                                             "quit(q)")),
+                         (top.KEYS_HINTS, ("back(esc)", "quit(q)"))):
+        bar = top.hint_text(groups, 40)
+        for label in must:
+            check(f"40칸에서도 {label}는 남는다", label in bar, bar)
+
+
+def test_the_hint_bar_is_drawn_with_the_keys_standing_out():
+    """Bold is an attribute, not a character, so read it back from the pty."""
+    screen = _render(TOP_SAMPLE, cols=116)
+    check("바에 괄호 표기가 보인다", "skip(s)" in screen, screen)
+    check("역할 구분선이 보인다", "│" in screen, screen)
+    check("예외가 새지 않았다", "Traceback" not in screen, screen)
+
+    narrow = _render(TOP_SAMPLE, cols=40, rows_high=8)
+    check("좁은 창에서도 나가는 법은 남는다", "quit(q)" in narrow, narrow)
     check("좁은 창에서도 예외가 없다", "Traceback" not in narrow, narrow)
 
 
@@ -1203,8 +1275,9 @@ def test_the_view_targets_the_marked_sessions():
     check("space는 표시 토글", top.action_for(ord(" ")) == ("mark", None))
     check("a는 전체 선택", top.action_for(ord("a")) == ("mark-all", None))
     check("d는 기본설정 적용", top.action_for(ord("d")) == ("defaults", None))
-    for label in ("space ", "a ", "d ", "r "):
-        check(f"도움줄에 {label.strip()} 키가 적혀 있다", label in top.HELP, top.HELP)
+    wide = top.hint_text(top.LIST_HINTS, 120)
+    for label in ("mark(space)", "all(a)", "defaults(d)", "poll(r)"):
+        check(f"도움줄에 {label}가 적혀 있다", label in wide, wide)
 
 
 def test_the_defaults_the_view_pushes_are_the_stored_ones():

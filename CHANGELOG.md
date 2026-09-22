@@ -19,6 +19,13 @@ The reasoning behind each judgement is recorded as a numbered entry in
   grouped by screen, plus what `cover`, `cover delay`, `idle threshold`, `hook stall` and
   `stored defaults` mean. It scrolls, and `?` or `esc` puts it away again (D-051).
 
+### Changed
+
+- **The `--top` hint bar reads `what it does(key)`** -- `skip(s)`, `push defaults(d)` -- with
+  the key in bold, grouped by purpose with `│`, and laid out for the window it is in: fuller
+  wording when there is room, and the keys it can spare dropped when there is not. `help(?)`
+  and `quit(q)` survive any width (D-052).
+
 ## [0.1.0] - 2026-09-22
 
 First release. The runner, the overlay and the control channel are in place, and the

@@ -33,24 +33,118 @@ REFRESH = 0.5  # seconds between polls; the panel's own clock is 20fps
 # large enough that holding the key is not the only way to get anywhere.
 STEP = {"overlay_delay": 1.0, "idle_silence": 0.1, "hook_stall": 10.0}
 
-# One line, and it has to fit: measured at 95 cells so a 96-column terminal
-# still shows the last key. Longer labels pushed `q quit` off the screen.
-HELP = ("space mark  a all  enter detail  s skip  w wake  d defaults  "
-        "c config  r poll  ? keys  q quit")
+# The hint bar at the bottom of every screen.
+#
+# Three things it has to do at once, and the first two pull against the third:
+# say what a key *does*, not what it is called; group the keys so the eye can
+# find the one it wants; and fit. So it is a table rather than a string, and
+# it is laid out against the window that is actually there (D-052).
+#
+# Each item is (long label, short label, key, rank). Rank 0 is never dropped;
+# the rest go in descending order when the window is too narrow for them, so
+# what survives a 60-column terminal is the handful of keys the screen cannot
+# be used without.
+LIST_HINTS = (
+    (("mark", "mark", "space", 3), ("all", "all", "a", 4),
+     ("open", "open", "enter", 2)),
+    (("skip turn", "skip", "s", 0), ("wake", "wake", "w", 0),
+     ("cover delay", "cover", "+/-", 6), ("idle threshold", "idle", "[/]", 7)),
+    (("push defaults", "defaults", "d", 1),
+     ("edit defaults", "config", "c", 1)),
+    (("refresh", "poll", "r", 5), ("help", "help", "?", 0),
+     ("quit", "quit", "q", 0)),
+)
 
-# The detail pane's own line. It has a whole screen, but the same 95-cell
-# budget applies -- a 96-column terminal must still show the last key.
-DETAIL_HELP = ("↑↓ scroll  esc/enter list  s skip  w wake  d defaults  "
-               "c config  r poll  ? keys  q quit")
+# The detail pane's own bar. The movement keys mean something else here
+# (D-045) and `esc` goes back rather than quitting, so the first group
+# differs; everything after it is the same commands on one session.
+DETAIL_HINTS = (
+    (("scroll", "scroll", "↑↓", 3), ("back", "back", "esc", 0)),
+    (("skip turn", "skip", "s", 0), ("wake", "wake", "w", 0),
+     ("cover delay", "cover", "+/-", 5), ("idle threshold", "idle", "[/]", 6)),
+    (("push defaults", "defaults", "d", 1),
+     ("edit defaults", "config", "c", 1)),
+    (("refresh", "poll", "r", 4), ("help", "help", "?", 0),
+     ("quit", "quit", "q", 0)),
+)
 
-# The editor's own line (D-050). Six keys with the whole screen to say them
-# in, so nothing here is abbreviated.
-CONFIG_HELP = ("↑↓ field  +/- change  0 shipped  enter save  esc back  "
-               "? keys  q quit")
+# The defaults editor (D-050). `save` is rank 0 for the obvious reason: a
+# screen that can lose an edit must always say which key does not lose it.
+CONFIG_HINTS = (
+    (("field", "field", "↑↓", 2), ("change", "change", "+/-", 0),
+     ("shipped", "shipped", "0", 1)),
+    (("save", "save", "enter", 0), ("back", "back", "esc", 0)),
+    (("help", "help", "?", 3), ("quit", "quit", "q", 0)),
+)
 
-# The key reference's own line (D-051). It is the screen people arrive at
-# when the others were not clear enough, so it says only how to leave.
-KEYS_HELP = "↑↓ scroll  esc/enter back  q quit"
+# The key reference (D-051): it is the screen that explains the others, so
+# its own bar says nothing but how to leave.
+KEYS_HINTS = (
+    (("scroll", "scroll", "↑↓", 1), ("back", "back", "esc", 0),
+     ("quit", "quit", "q", 0)),
+)
+
+# Between two keys, and between two groups.
+HINT_GAP = "  "
+HINT_BREAK = " │ "
+
+
+def hint_bar(groups, width):
+    """The hint bar for `groups`, as [(text, is_key)] segments. Pure.
+
+    `is_key` is what the drawing emphasises -- the key itself, inside the
+    brackets -- so the eye can skim the keys down one axis and the words down
+    the other without the bar needing two lines.
+
+    Laid out for the window it is given: the full wording if it fits, the
+    short wording if not, and then the lowest-ranked key dropped and both
+    tried again. A bar that still does not fit is returned anyway and the
+    drawing clips it -- losing the tail of the least important key beats
+    drawing nothing.
+    """
+    ranks = sorted({item[3] for group in groups for item in group if item[3]},
+                   reverse=True)
+    # The wording is decided once, for the whole bar and before anything is
+    # dropped, so that resizing the window changes it at one width and not at
+    # several: the full wording if it fits with at most the two lowest-ranked
+    # keys given up for it, the short wording otherwise. Trading a third key
+    # for longer words is a bad trade -- the words are on `?` either way.
+    long = any(_segments_width(_compose(groups, True, tuple(ranks[:level])))
+               <= width for level in range(0, min(3, len(ranks) + 1)))
+    dropped = []
+    while True:
+        segments = _compose(groups, long, tuple(dropped))
+        if _segments_width(segments) <= width or not ranks:
+            return segments
+        dropped.append(ranks.pop(0))
+
+
+def hint_text(groups, width):
+    """The same bar as plain text -- what the tests and the README read."""
+    return "".join(text for text, _ in hint_bar(groups, width))
+
+
+def _compose(groups, long, dropped):
+    """The segments for one choice of wording and one set of dropped ranks."""
+    out = []
+    for group in groups:
+        kept = [item for item in group if item[3] not in dropped]
+        if not kept:
+            continue
+        if out:
+            out.append((HINT_BREAK, False))
+        for index, (wide, short, key, _rank) in enumerate(kept):
+            if index:
+                out.append((HINT_GAP, False))
+            out.append((f"{wide if long else short}(", False))
+            out.append((key, True))
+            out.append((")", False))
+    return out
+
+
+def _segments_width(segments):
+    return sum(_width(text) for text, _ in segments) + 2  # a space each end
+
 
 # What the runner reports in its own words, so a Korean screen does not show
 # the protocol's `busy`/`waiting` (D-044).
@@ -437,6 +531,36 @@ def _put(screen, line, text, attr=curses.A_NORMAL):
         screen.addstr(line, 0, _clip(text, max(0, width - 1)), attr)
     except curses.error:
         pass
+
+
+def _put_bar(screen, line, groups):
+    """Draw the hint bar across the bottom row, keys emphasised.
+
+    One reverse-video row, with the key inside each bracket in bold. Written
+    segment by segment because that emphasis is the whole point (D-052) --
+    a single `addstr` can only be one attribute. The last cell of the row is
+    left alone for the same reason `_put` leaves it: curses errors on a write
+    that ends there.
+    """
+    height, width = screen.getmaxyx()
+    if not 0 <= line < height:
+        return
+    column = 1  # the leading space of the bar
+    try:
+        screen.addstr(line, 0, " " * max(0, width - 1), curses.A_REVERSE)
+    except curses.error:
+        pass
+    for text, is_key in hint_bar(groups, width - 1):
+        room = max(0, width - 1 - column)
+        if room <= 0:
+            break
+        piece = _clip(text, room)
+        try:
+            screen.addstr(line, column, piece,
+                          curses.A_REVERSE | (curses.A_BOLD if is_key else 0))
+        except curses.error:
+            pass
+        column += _width(piece)
 
 
 def targets(rows, marked, selected):
@@ -845,7 +969,7 @@ def _draw(screen, rows, selected, marked, message):
 
     if message:
         _put(screen, height - 2, message)
-    _put(screen, height - 1, _pad(HELP, width - 1), curses.A_REVERSE)
+    _put_bar(screen, height - 1, LIST_HINTS)
     screen.refresh()
 
 
@@ -880,8 +1004,7 @@ def _draw_detail(screen, row, message, offset=0):
 
     if message:
         _put(screen, height - 2, message)
-    _put(screen, height - 1, _pad(DETAIL_HELP, width - 1),
-         curses.A_REVERSE)
+    _put_bar(screen, height - 1, DETAIL_HINTS)
     screen.refresh()
     return offset
 
@@ -912,7 +1035,7 @@ def _draw_keys(screen, message, offset=0):
 
     if message:
         _put(screen, height - 2, message)
-    _put(screen, height - 1, _pad(KEYS_HELP, width - 1), curses.A_REVERSE)
+    _put_bar(screen, height - 1, KEYS_HINTS)
     screen.refresh()
     return offset
 
@@ -947,8 +1070,7 @@ def _draw_config(screen, shipped, stored, staged, cursor, message):
 
     if message:
         _put(screen, height - 2, message)
-    _put(screen, height - 1, _pad(CONFIG_HELP, width - 1),
-         curses.A_REVERSE)
+    _put_bar(screen, height - 1, CONFIG_HINTS)
     screen.refresh()
 
 
