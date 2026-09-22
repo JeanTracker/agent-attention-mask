@@ -1,4 +1,10 @@
-"""Run every phase suite; exit non-zero if any check fails."""
+"""Run every phase suite; exit non-zero if any check fails.
+
+This is the terminal layer: it starts real runners on real ptys and takes
+minutes, most of it waiting. `run_fast.py` is the tier that does not need a
+terminal and finishes in a couple of seconds -- run that while you work, and
+this before you push (D-054).
+""" 
 
 import subprocess
 import sys
@@ -15,6 +21,7 @@ SUITES = [
     "test_phase8_inputline.py",
     "test_phase9_hooks.py",
     "test_phase10_control.py",
+    "test_phase11_judge.py",
 ]
 
 failed = []

@@ -1356,10 +1356,40 @@ def test_defaults_reach_two_running_sessions_at_once():
           "overlay_delay=17" in str(outcome.get("message")), str(outcome))
 
 
+# The cases that start a real runner on a pty. `run_fast.py` skips them and
+# `run_all.py` does not: what they check is bytes reaching a terminal, which
+# no amount of faking the clock can stand in for (D-054).
+SLOW = (
+    "test_the_session_is_discoverable_and_the_token_is_not_world_readable",
+    "test_the_runner_cleans_up_after_itself",
+    "test_status_reports_what_the_screen_is_doing",
+    "test_the_session_id_reaches_the_discovery_file_too",
+    "test_a_caller_without_the_token_is_refused",
+    "test_set_changes_when_the_screen_covers_next",
+    "test_get_and_set_agree",
+    "test_a_bad_set_is_refused_with_a_reason",
+    "test_skip_over_the_socket_matches_the_q_key",
+    "test_skip_is_refused_when_there_is_no_turn_to_skip",
+    "test_wake_over_the_socket_uncovers",
+    "test_an_unknown_command_is_refused",
+    "test_socket_traffic_never_reaches_the_agent",
+    "test_the_agent_does_not_inherit_the_control_socket",
+    "test_a_client_that_dies_mid_request_does_not_take_the_runner_down",
+    "test_a_client_that_never_reads_does_not_stall_the_wake",
+    "test_a_runner_without_a_socket_behaves_exactly_as_before",
+    "test_defaults_reach_two_running_sessions_at_once",
+)
+
+
 if __name__ == "__main__":
+    only_fast = "--fast" in sys.argv
     for fn in list(globals().values()):
-        if callable(fn) and getattr(fn, "__name__", "").startswith("test_"):
-            fn()
+        name = getattr(fn, "__name__", "")
+        if not (callable(fn) and name.startswith("test_")):
+            continue
+        if only_fast and name in SLOW:
+            continue
+        fn()
     print()
     if FAILURES:
         print(f"{len(FAILURES)}건 실패: {', '.join(FAILURES)}")

@@ -38,15 +38,26 @@ condition — must pass.
 
 ## Tests
 
+Two tiers, and the line between them is what a fake clock can stand in for (D-054).
+
 ```sh
-python3 tests/run_all.py
+python3 tests/run_fast.py    # ~2s: the state machine and the layout functions
+python3 tests/run_all.py     # ~12min: the same, plus real runners on real ptys
 ```
 
-It runs the 8 phase suites in order and exits non-zero if any one of them fails. Add an entry
-to the relevant phase suite for new behaviour, and if you need something to stand in for an
-agent, add a fixture under `tests/fixtures/` — `streamer.py`, for instance, is the fixture
-that reproduces real claude's streaming intervals and growing token count to pin the D-023
-and D-024 regressions.
+**Run the fast tier as often as you like, and the full one before you push.** CI runs the
+fast tier on every pull request and the full one once something lands on `master`, so the
+terminal-layer guarantees — P-103's scrollback, SC-002's latency, the alternate-screen
+sequences — are checked on your machine or not at all before the merge. A push that skips
+it is a push that finds out on `master`.
+
+`run_all.py` runs the 10 phase suites in order and exits non-zero if any one of them fails.
+Add an entry to the relevant suite for new behaviour: a judgement about *when* to cover
+belongs in `test_phase11_judge.py`, where time is an argument and a case costs a
+millisecond, and only what needs a terminal belongs in a pty suite. If you need something
+to stand in for an agent, add a fixture under `tests/fixtures/` — `streamer.py`, for
+instance, is the fixture that reproduces real claude's streaming intervals and growing
+token count to pin the D-023 and D-024 regressions.
 
 If you need a real agent's timing or hook payloads, build the observations with an instrument
 before writing the test.

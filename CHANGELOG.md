@@ -25,6 +25,11 @@ The reasoning behind each judgement is recorded as a numbered entry in
   the key in bold, grouped by purpose with `│`, and laid out for the window it is in: fuller
   wording when there is room, and the keys it can spare dropped when there is not. `help(?)`
   and `quit(q)` survive any width (D-052).
+- **The cover/uncover state machine moved into `amask/judge.py`, with time as an argument.**
+  No behaviour change; what changes is that it can be tested without a terminal. The suite
+  is now two tiers: `tests/run_fast.py` (~2s, no pty) and `tests/run_all.py` (~12min, real
+  runners). CI runs the fast tier on pull requests and the full one on `master`; contributors
+  run the full one before pushing (D-054).
 - CI runs the suites on Linux and macOS against Python 3.13 only. The suite drives real
   ptys for minutes a job, and the axis that has ever caught anything twice is the OS; the
   3.11 floor is now checked by hand (D-053).

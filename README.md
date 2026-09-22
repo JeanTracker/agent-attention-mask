@@ -296,13 +296,19 @@ safe once nothing is running.
 ## Development
 
 ```sh
-python3 tests/run_all.py
+python3 tests/run_fast.py    # ~2s, no terminal needed
+python3 tests/run_all.py     # ~12min, real ptys -- run it before you push
 ```
 
-Nine phase suites, driving real ptys against fixture agents in `tests/fixtures/`. CI runs
-them on Linux and macOS against Python 3.13. The floor is 3.11, and nothing in the code is
-newer than that, but it is checked by hand rather than on every push -- if you are on 3.11
-or 3.12, run the suites before opening a pull request.
+Ten phase suites. Nine drive real ptys against the fixture agents in `tests/fixtures/`; the
+tenth drives the cover/uncover state machine directly, with time as an argument rather than
+something to wait for, and finishes in milliseconds (D-054). The fast tier is those cases
+plus everything else that needs no terminal.
+
+CI runs the fast tier on every pull request and the full suite on Linux and macOS once
+something lands on `master`, which is why the full one is yours to run first. Python floor
+is 3.11, also checked by hand -- if you are on 3.11 or 3.12, run the suites before opening
+a pull request.
 
 `CONTRIBUTING.md` has the procedure for changing the code and the module map.
 `.governance/DECISIONS.md` records why the design is the way it is -- every judgement above
