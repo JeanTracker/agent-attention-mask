@@ -324,3 +324,7 @@
   - `test_phase9_hooks.py`의 화이트박스 두 건은 `Runner` 내부를 직접 찔러서 `Judge` 검사로 고쳐 썼다.
   - 남은 것은 HRQ-007(스위트↔SC 대응, PR에서 터미널 계층을 안 도는 범위, phase9·phase4 pty 케이스 정리).
   - 검증: `python3 tests/run_all.py` **10개 스위트 전부 통과**(로컬 macOS, 2026-09-22). `python3 tests/run_fast.py` 2.1초.
+- **`claude --resume`에서 매트릭스가 늦게 뜬다는 신고 조사 (2026-09-23)**: 코드 변경 없음. amask 쪽 원인은 찾지 못했다. `AMASK_DEBUG`를 켜고 기본 타이밍으로 네 경우(새 세션, `--resume <id>`, 선택 화면, 3.4MB 트랜스크립트 사본)를 돌렸는데, 덮기는 전부 **마지막 키 입력 + 4.0초**(`held()` → `OVERLAY_DELAY`)에 걸렸다. 네 경우 모두 `UserPromptSubmit`은 엔터 뒤 0.15초 안에 왔다. amask에는 resume 전용 경로가 없고, 실행 중이던 실제 resume 세션(pid 26131)도 `hooks: true`에 기본 설정이었다. 선택 화면은 amask를 거쳐도 0.7초에 그려진다.
+  - 지연은 서버 쪽이다. 실제 세션 `d40fbce1`은 17시간 쉰 뒤 재개됐고 그 사이 `/model`로 `claude-opus-5` → `claude-opus-5-5`로 바뀌었다. 첫 턴은 `cache_read=25k / cache_write=274k`로 캐시를 전혀 못 탔고, 첫 응답까지 20.7초가 걸렸다. 같은 프롬프트가 7.7초 간격으로 두 번 제출돼 있고 첫 번째에는 응답이 없다. 다시 입력하면 키마다 4초 대기가 새로 시작되므로, 체감되는 "늦은 매트릭스"는 이 재입력으로 설명된다.
+- **MODEL 칸에 답변 본문이 들어가던 문제 (D-055, 2026-09-23)**: 신고 화면은 `Gemini는 "twoprimi Jump to bottom (click) ↓`. `_MODEL_HINT`가 계열 단어 뒤 40바이트를 잡고, 순위가 길이 우선이라 산문이 이기고 눌러앉았다. 정규식을 계열+버전(+접미사, +컨텍스트 창) 모양으로 좁히고 순위 맨 앞에 컨텍스트 창 유무를 넣었다. 순수 함수 `_pick_model`로 떼어 `tests/test_phase12_scrape.py`를 추가(빠른·전체 계층 등록, 스위트 수 11).
+  - 검증: `python3 tests/run_all.py` **11개 스위트 전부 통과**(로컬 macOS, 2026-09-23). `python3 tests/run_fast.py` 통과.

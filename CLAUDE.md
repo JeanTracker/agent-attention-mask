@@ -51,7 +51,7 @@ python3 tests/run_fast.py    # ~2s, no terminal needed
 python3 tests/run_all.py     # ~12min, real ptys -- before you push
 ```
 
-10 phase suites in the full run. If you changed code, use the fast tier as you go and the
+11 phase suites in the full run. If you changed code, use the fast tier as you go and the
 full one before pushing, and report the result. CI runs only the fast tier on a pull
 request (D-054), so the terminal-layer suites -- P-103's scrollback, SC-002's latency --
 are checked on this machine or not at all. If you need a real agent's timing or hook

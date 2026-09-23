@@ -301,14 +301,21 @@ _ESCAPE_SEQ = re.compile(
 # any agent that does not print them simply shows nothing for that field.
 # The middle dot and arrows are UTF-8 byte sequences here, since the agent's
 # output is raw bytes: \xc2\xb7 is "·", \xe2\x86\x91/\x93 are the arrows.
-_MODEL_HINT = re.compile(rb"(Opus|Sonnet|Haiku|GPT|Gemini)(?:[^|\x1b\n\r\xc2]|\xc2(?!\xb7)){0,40}")
+#
+# The model hint has to be the whole shape -- family, version, optional size
+# suffix and context window -- not the family word plus whatever follows it.
+# The agent's own reply text passes through here too, and a reply that merely
+# mentioned "Gemini" once filled the panel with forty bytes of prose
+# ("Gemini는 \"twoprimi Jump to bottom (click) ↓"), which then outranked the
+# real name for good (D-055).
+_MODEL_HINT = re.compile(
+    rb"(?<![A-Za-z])(?:Opus|Sonnet|Haiku|Fable|GPT|Gemini)[ -]?[0-9]+(?:\.[0-9]+)*"
+    rb"(?:[ -]?(?:Pro|Flash|Lite|[Mm]ini|[Cc]odex)(?![A-Za-z]))*"
+    rb"(?:\s*\(\s*[0-9.]+\s*[KkMm]\s*context\s*\))?"
+)
 _TOKENS_HINT = re.compile(
     rb"(?:\xe2\x86[\x91\x93])?\s*([0-9][0-9.,]*\s*[kKmM]?)\s*tokens"
 )
-
-# Everything after the model name itself: claude appends its effort level and
-# plan, which are not worth a panel row.
-_MODEL_TRIM = re.compile(r"\s*(?:with|\||\u00b7)")
 
 # How much recent agent text to keep for those scrapes.
 _CHROME_TAIL = 8192
@@ -917,14 +924,7 @@ class Runner:
         # between them. Take every candidate and keep the readable one --
         # searching for just the first match always returned whichever sat
         # earlier in the buffer, which was the squashed one.
-        best = self.hud.model
-        for match in _MODEL_HINT.finditer(self._chrome):
-            name = _MODEL_TRIM.split(
-                match.group(0).decode("utf-8", "replace"), 1
-            )[0].strip(" -|·")
-            if name and _model_rank(name) > _model_rank(best):
-                best = name
-        self.hud.model = best
+        self.hud.model = _pick_model(self._chrome, self.hud.model)
         # The last match, not the first: the count only goes up, and the buffer
         # holds every value the status line has shown. Taking the first match
         # pinned the panel to the oldest one still in the window -- measured,
@@ -1101,11 +1101,29 @@ class Runner:
                 return
 
 
+def _pick_model(text, current=""):
+    """The most presentable model name in `text`, or `current` if none beats it.
+
+    `current` is carried over because the splash that holds the spaced name
+    scrolls out of the scrape window long before the session ends.
+    """
+    best = current
+    for match in _MODEL_HINT.finditer(text):
+        name = match.group(0).decode("utf-8", "replace").strip()
+        if _model_rank(name) > _model_rank(best):
+            best = name
+    return best
+
+
 def _model_rank(name):
-    """How presentable a scraped model name is: spaced beats squashed."""
+    """How presentable a scraped model name is: spaced beats squashed.
+
+    A name carrying its context window ranks above one without: that is the
+    status line's own form, and reply text rarely spells it out (D-055).
+    """
     if not name:
-        return (0, 0)
-    return (1 if " " in name else 0, len(name))
+        return (0, 0, 0)
+    return ("context" in name, " " in name, len(name))
 
 
 _DEBUG = os.environ.get("AMASK_DEBUG")

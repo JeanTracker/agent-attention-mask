@@ -22,6 +22,7 @@ SUITES = [
     "test_phase9_hooks.py",
     "test_phase10_control.py",
     "test_phase11_judge.py",
+    "test_phase12_scrape.py",
 ]
 
 failed = []

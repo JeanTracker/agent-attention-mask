@@ -51,7 +51,7 @@ terminal-layer guarantees — P-103's scrollback, SC-002's latency, the alternat
 sequences — are checked on your machine or not at all before the merge. A push that skips
 it is a push that finds out on `master`.
 
-`run_all.py` runs the 10 phase suites in order and exits non-zero if any one of them fails.
+`run_all.py` runs the 11 phase suites in order and exits non-zero if any one of them fails.
 Add an entry to the relevant suite for new behaviour: a judgement about *when* to cover
 belongs in `test_phase11_judge.py`, where time is an argument and a case costs a
 millisecond, and only what needs a terminal belongs in a pty suite. If you need something
