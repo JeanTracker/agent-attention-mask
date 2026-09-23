@@ -74,20 +74,20 @@ that turn started. Submitting your next prompt lifts it. Any other key just hand
 back; the key used to wake is not forwarded to the agent, so waking with Enter neither
 submits an empty prompt nor approves a pending confirmation.
 
-### Wrapping `claude` by default
+### Wrapping an agent by default
 
-To have every session run covered without typing `amask`, alias it. What the alias should say
-depends on what `claude` already is, so ask first with `type claude`.
+To have every session run covered without typing `amask`, alias the agent. What the alias
+should say depends on what the name already is, so ask first with `type claude` or
+`type codex`. Bash, zsh and ksh all take the same line; only the rc file differs --
+`~/.zshrc`, `~/.bashrc`, or `~/.bash_profile` for the login shell macOS Terminal starts.
 
-**If the answer is a path**, the plain alias works (bash, zsh and ksh all take the same line;
-only the rc file differs -- `~/.zshrc`, `~/.bashrc`, or `~/.bash_profile` for the login shell
-macOS Terminal starts):
+**`claude`.** If `type` answers with a path, the plain alias works:
 
 ```sh
 alias claude='amask claude'
 ```
 
-**If the answer is an alias of its own**, you are on an older Claude Code install that points
+If it answers with an alias of its own, you are on an older Claude Code install that points
 `claude` at a path not on PATH. Pass that path through instead, carrying over any flags the
 old alias had:
 
@@ -97,11 +97,20 @@ alias claude='amask ~/.claude/local/claude'
 
 Either way the argument's basename has to stay `claude`: that is what the runner matches on
 before it wires up its hooks, and a name that does not match falls back to timing heuristics.
-`command claude` still runs the agent unwrapped.
 
-Avoid a wrapper *script* named `claude` earlier on PATH. The runner launches the agent with
-`execvp`, which resolves the name through PATH again, finds the wrapper and calls back into
-amask forever.
+**`codex`.** The plain alias is all there is to it:
+
+```sh
+alias codex='amask codex'
+```
+
+Codex fires no hooks, so there is nothing for the runner to wire up and no basename to keep:
+covering is judged from output timing alone (see How it works). The MODEL and TOKENS rows are
+scraped from claude's status line, so under codex they may stay blank.
+
+`command claude` or `command codex` still runs the agent unwrapped. Avoid a wrapper *script*
+of the same name earlier on PATH: the runner launches the agent with `execvp`, which resolves
+the name through PATH again, finds the wrapper and calls back into amask forever.
 
 ## How it works
 
