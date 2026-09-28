@@ -81,13 +81,16 @@ def fixture(name, *args):
 class Result(tuple):
     """(output, exit_code), plus timing detail for the latency assertions."""
 
-    def __new__(cls, data, code, timeline, feeds, acts=()):
+    def __new__(cls, data, code, timeline, feeds, acts=(), wall_started=None):
         self = super().__new__(cls, (data, code))
         self.data = data
         self.code = code
         self.timeline = timeline  # [(elapsed_seconds, bytes), ...]
         self.feeds = feeds  # [(elapsed_seconds, bytes), ...]
         self.acts = list(acts)  # [(elapsed_seconds, returned_value), ...]
+        # time.time() at elapsed 0, for lining up a child's own wall-clock
+        # stamps with the timeline.
+        self.wall_started = wall_started
         return self
 
     def first_time(self, needle):
@@ -130,6 +133,7 @@ def run_in_pty(args, feed=(), timeout=15.0, rows=24, cols=80, env=None, observe=
     pending = list(feed)
     actions = list(act)
     started = time.monotonic()
+    wall_started = time.time()
     chunks = []
     timeline = []
     feeds = []
@@ -146,7 +150,7 @@ def run_in_pty(args, feed=(), timeout=15.0, rows=24, cols=80, env=None, observe=
                 # was seen instead of treating the deadline as a failure.
                 os.close(master)
                 return Result(b"".join(chunks), None, timeline, feeds,
-                              _finish(acts, threads))
+                              _finish(acts, threads), wall_started)
             blob = b"".join(chunks)
             raise TimeoutError(
                 f"timed out after {timeout}s; {len(blob)} bytes, tail={blob[-160:]!r}"
@@ -190,12 +194,12 @@ def run_in_pty(args, feed=(), timeout=15.0, rows=24, cols=80, env=None, observe=
                 _drain(master, chunks, timeline, started)
                 os.close(master)
                 return Result(b"".join(chunks), _code(status), timeline, feeds,
-                  _finish(acts, threads))
+                  _finish(acts, threads), wall_started)
 
     os.close(master)
     _, status = os.waitpid(pid, 0)
     return Result(b"".join(chunks), _code(status), timeline, feeds,
-                  _finish(acts, threads))
+                  _finish(acts, threads), wall_started)
 
 
 def _finish(acts, threads):
