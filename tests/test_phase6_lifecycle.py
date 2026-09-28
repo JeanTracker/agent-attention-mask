@@ -32,14 +32,16 @@ def rain_windows(res):
 
     A chunk can carry both the last rain cells and the sequence that uncovers
     the screen; closing only on chunks *without* rain merged two overlays into
-    one and hid re-entry entirely.
+    one and hid re-entry entirely. Reopening on that same chunk's rain did the
+    same the other way round: the span restarted at the uncover and swallowed
+    the real re-entry after it. Only rain after the last uncover can reopen.
     """
     spans, open_at = [], None
     for when, chunk in res.timeline:
         if open_at is not None and ALT_EXIT in chunk:
             spans.append((open_at, when))
             open_at = None
-        if open_at is None and is_rain(chunk):
+        if open_at is None and is_rain(chunk.rsplit(ALT_EXIT, 1)[-1]):
             open_at = when
     if open_at is not None:
         spans.append((open_at, res.timeline[-1][0]))
@@ -155,16 +157,21 @@ def test_manual_wake_returns_while_the_agent_is_still_working():
 
 
 def test_one_delay_governs_both_the_first_cover_and_the_return():
-    """No separate grace constant to reason about (D-022)."""
-    plain = run_in_pty(fixture("chatty.py", 5), timeout=20)
-    manual = run_in_pty(fixture("chatty.py", 10), feed=[(2.0, b" ")], timeout=25)
-    first = rain_windows(plain)
-    again = [s for s in rain_windows(manual) if s[0] > manual.feeds[0][0] + 0.3]
+    """No separate grace constant to reason about (D-022).
+
+    Both delays come from the same run, so they share one machine's load.
+    """
+    res = run_in_pty(fixture("chatty.py", 10), feed=[(2.0, b" ")], timeout=25)
+    woke = res.feeds[0][0]
+    spans = rain_windows(res)
+    first = [s for s in spans if s[0] < woke]
+    again = [s for s in spans if s[0] > woke + 0.3]
     if first and again:
-        gap = again[0][0] - manual.feeds[0][0]
+        gap = again[0][0] - woke
         check("복귀 후 지연 ≈ 최초 지연", abs(gap - first[0][0]) < 0.6, f"{gap:.2f}s vs {first[0][0]:.2f}s")
     else:
-        check("복귀 후 지연 ≈ 최초 지연", False, "측정 구간 부족")
+        spans_at = [(round(a, 2), round(b, 2)) for a, b in spans]
+        check("복귀 후 지연 ≈ 최초 지연", False, f"측정 구간 부족: wake t={woke:.2f}, 구간 {spans_at}")
 
 
 def test_typing_after_a_manual_wake_keeps_it_off():
