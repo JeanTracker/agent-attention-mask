@@ -10,11 +10,12 @@ ending; tests/test_phase6_lifecycle.py covers the beginning.
 """
 
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from harness import fixture, is_rain, run_in_pty
+from harness import budget, fixture, is_rain, run_in_pty
 
 ALT_ENTER = b"\x1b[?1049h"
 ALT_EXIT = b"\x1b[?1049l"
@@ -108,13 +109,34 @@ def test_idle_threshold_is_tunable():
 
     The agent has to stay alive past going quiet, otherwise its exit wakes the
     screen first and both runs measure the same thing.
+
+    The silence is measured from the fixture's own stamp, not from the fork:
+    time since the fork also counts the interpreter's start, and on a shared
+    runner that once added ~1.9s to one run and not the other. Each run's
+    silence is checked against its own threshold, so a run that picked up the
+    wrong one fails by name instead of looking like a slow machine.
     """
-    args = fixture("busy_then_read.py", 2.0)
+    args = fixture("busy_then_read.py", 2.0, "stamp")
     slow = run_in_pty(args, env={"AMASK_IDLE_SILENCE": "2.5"}, timeout=12, observe=True)
     fast = run_in_pty(args, timeout=12, observe=True)
-    slow_woke, fast_woke = slow.first_time(ALT_EXIT), fast.first_time(ALT_EXIT)
-    ok = slow_woke is not None and fast_woke is not None and slow_woke > fast_woke + 1.0
-    check("유휴 임계값 조정 가능", ok, f"기본={fast_woke} 느림={slow_woke}")
+    slow_quiet, fast_quiet = _silence_before_wake(slow), _silence_before_wake(fast)
+    detail = f"기본={fast_quiet} 느림={slow_quiet} (s, 작업 끝→복귀)"
+    # The tick and the uncover add a little; budget() widens only that part.
+    check("기본 임계값(0.6s)으로 복귀", fast_quiet is not None
+          and 0.5 < fast_quiet < 0.6 + budget(0.5), detail)
+    check("조정한 임계값(2.5s)으로 복귀", slow_quiet is not None
+          and 2.4 < slow_quiet < 2.5 + budget(0.5), detail)
+    check("유휴 임계값 조정 가능", fast_quiet is not None and slow_quiet is not None
+          and slow_quiet > fast_quiet + 1.0, detail)
+
+
+def _silence_before_wake(res):
+    """Seconds between the fixture's DONE_AT stamp and the first uncover."""
+    woke = res.first_time(ALT_EXIT)
+    stamp = re.search(rb"DONE_AT:([0-9.]+)", res.data)
+    if woke is None or stamp is None:
+        return None
+    return round(res.wall_started + woke - float(stamp.group(1)), 2)
 
 
 def test_a_streaming_pause_does_not_uncover_the_screen():
