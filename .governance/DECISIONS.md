@@ -370,3 +370,26 @@
   * `Fable`을 계열에 추가했다(현행 모델 계열).
   * **남는 구멍**: 답변이 `Gemini 2.5 Pro`처럼 버전까지 적고, 실제 모델이 컨텍스트 창 없이 `Sonnet 5`로만 표시되면 여전히 산문이 이긴다. 상태줄과 본문을 바이트만으로 구분할 방법이 없어서 받아들였다. 테스트에 `known gap`으로 박아 두었다.
   * 검사: `tests/test_phase12_scrape.py`(순수 함수 `_pick_model`, 빠른 계층·전체 계층 모두에 등록).
+* **D-056**: 대화형 `claude`에는 **mod(함수 훅 플러그인)를 붙여 인터럽트를 받는다** — D-036에서 이탈, 사용자 승인 (결정일: 2026-10-02)
+  * 문제는 D-036 그대로다. 응답 중 ESC에는 classic 훅이 하나도 발화하지 않아, 걸린 BUSY가 `HOOK_STALL` 120초까지 유휴 프롬프트 위에 레인을 다시 덮는다. D-036은 믿을 만한 신호가 없어서 "감지하지 않는다"였다. 이번에 신호가 생겼다.
+  * **실측 (Claude Code 2.1.287)**: mod의 `turn.complete`는 스트리밍 중 ESC 뒤 0.11초, 툴 실행 중 ESC 뒤 0.15초에 `reason: 'aborted'`로 온다. 같은 실행에서 classic 훅은 아무것도 오지 않았다. `amask claude` 실물로도 확인했다 — mod를 켜면 깨운 뒤 ESC 후 화면이 걷힌 채로 남고, 끄면(2.1.285) 다시 덮인다.
+  * **바꾼 것**: `mod/`(TypeScript 한 파일)가 메인 루프(`agentId` 없음)의 `reason === 'aborted'`만 기존 emitter로 FIFO에 `TurnAborted`를 쓴다. `EVENT_MEANING["TurnAborted"] = WAITING`이고, Claude Code에 없는 훅 이름이라 settings 조각에서는 뺀다(`_FROM_MOD`). 정상 종료는 `Stop`이 이미 말하므로 보내지 않는다. 경로는 emitter처럼 패키지 위치에서 절대경로로 만들고, emitter 경로는 `AMASK_HOOK_EMITTER`로 넘긴다 — amask 밖에서 mod가 돌면 변수가 없어 아무 일도 하지 않는다.
+  * **붙이는 조건 넷, 하나라도 아니면 안 붙인다**: ① argv[0]이 `claude`이고 amask의 `--settings`를 붙이는 경우(사용자가 자기 `--settings`를 넘기면 안 붙인다 — mod만으로는 WAITING만 말할 수 있고 WAITING은 만료되지 않으므로(D-030) 인터럽트 한 번으로 그 세션의 덮기가 끝난다), ② `-p`/`--print`가 아님, ③ `mod/`가 있음, ④ `claude --version`이 `MOD_MIN_CLAUDE`(2.1.286) 이상. 버전을 못 읽으면(실패·시간 초과·파싱 불가) 안 붙인다. `--version`은 native 설치에서 0.01~0.03초.
+  * **하한 2.1.286의 근거**: 실제 ESC 실측에서 2.1.286·2.1.287은 `turn.complete(aborted)`를 냈고, 2.1.285·2.1.280·2.1.270·2.1.250은 mod 이벤트가 하나도 오지 않았다(2.1.285는 `session.start`로 mod 로드 자체는 확인됨). 2.1.200은 mod를 모른다. 그 아래 버전들도 `--plugin-dir`을 조용히 무시한다(2.1.200·2.1.250 `-p`, 종료코드 0, stderr 없음) — 게이트는 필수가 아니라 신중함이고, 사용자 요청이다.
+  * **`-p`를 뺀 이유**: print 실행에는 ESC가 없어 mod가 보고할 것이 없다. 그리고 mod는 서버가 내려주는 rollout 스위치 뒤에 있는데, 측정 당시 `-p` 프로세스에는 꺼져 있었고 그때 Claude Code가 stderr에 `hooks module not loaded: ... the rollout switch served off`를 한 줄 쓴다. amask가 붙인 플래그 때문에 사용자 스크립트의 stderr가 바뀌면 투명성(P-101)을 깬다.
+  * **D-006과의 관계**: Python 의존성은 늘지 않았다. 다만 저장소에 두 번째 언어가 들어왔다. mod는 Claude Code가 자기 런타임에서 실행하므로 amask가 설치·빌드할 것이 없다.
+  * **남는 것**: ① 대화형인데 rollout 스위치가 꺼진 사용자는 세션마다 transcript에 mod가 로드되지 않았다는 흐린 줄이 한 번 보일 수 있다(문서상 동작, 이 계정에서는 대화형에서 켜져 있어 재현하지 못함). ② `claude plugin test mod`는 같은 스위치 때문에 이 머신에서 돌지 않았다 — `mod/test/`는 작성만 되어 있다. ③ mod API는 빠르게 바뀐다(2.1.259 이하는 `$`를 헬퍼에 넘기는 모듈을 거부한다). 하한을 올리거나 이벤트가 바뀌면 `tests/probe_hooks.py --plugin-dir mod --interrupt ...`로 다시 잰다. ④ D-036의 `q`(이번 턴 건너뛰기)는 그대로 둔다 — 하한 아래, `-p`, 사용자 `--settings`에서는 여전히 유일한 탈출구다.
+  * 검사: `tests/test_phase13_mod.py`(빠른·전체 계층), `test_phase9_hooks.py`의 settings 조각 검사 갱신.
+* **D-057**: `claude`의 **하위 명령에는 명령줄을 건드리지 않는다** (결정일: 2026-10-06)
+  * 사용자 신고: alias(`claude='amask claude'`) 아래에서 `claude plugin test mod`가 `not run from this spelling. Use claude plugin test [dir], with no options before plugin`로 거부됐다. amask가 `--settings`(D-025)와 `--plugin-dir`(D-056)을 `plugin` 앞에 끼워 넣었기 때문이다.
+  * 실측(2.1.287): `plugin test`는 앞에 어떤 옵션이 붙어도 거부한다(`--settings`, `--plugin-dir` 각각). `mcp list`, `plugin validate`는 `--settings`가 앞에 붙어도 동작한다 — 그래서 D-025 이래 드러나지 않았다.
+  * 결정: 옵션이 아닌 첫 인자가 `claude --help`의 Commands 목록(`CLAUDE_SUBCOMMANDS`)에 있으면 훅도 mod도 붙이지 않는다. 하위 명령은 세션이 아니라 보고할 턴이 없으므로 잃는 것이 없다. `attach`도 포함한다 — 붙는 세션의 훅은 그 백그라운드 프로세스의 것이다. 목록에 없는 새 명령은 종전 동작(앞에 붙임)으로 떨어진다.
+  * 남는 구멍: 프롬프트를 인자로 주면서 그것이 정확히 명령 이름 한 단어인 경우(`claude doctor`)는 하위 명령으로 읽는다. Claude Code 자신도 그렇게 읽으므로 같다.
+  * 곁들여: 이 확인 중 `claude plugin test mod`가 처음으로 실행됐다(D-056에서는 rollout 스위치가 꺼져 거부) — `mod/test/` 5건 전부 통과, amask 경유도 통과.
+* **D-058**: alias 아래에서 **세션이 아닌 실행은 amask가 통째로 비켜선다** — D-057에서 이탈 (결정일: 2026-10-06)
+  * 사용자 지시: "claude, codex 모두 alias로 인해 동작 이슈가 나오면 안 돼." 기준은 **alias를 거친 실행이 alias 없는 실행과 같은 출력·같은 종료코드**다.
+  * D-057이 모자랐던 점: ① 하위 명령 목록을 코드에 박아 둬서 새 릴리스의 명령은 다시 깨진다. ② 명령줄에 옵션을 끼우지 않을 뿐 여전히 pty와 레인 아래에서 돌렸다(`claude update`가 4초 넘게 걸리면 덮인다). ③ codex는 보지 않았다.
+  * 결정: `main`이 `_is_session(argv)`이 아니면 tty가 아닐 때와 같은 `execvp`로 넘긴다 — amask가 프로세스에 남지 않으므로 출력·종료코드·시그널이 원본 그대로다. 세션 판정은 옵션이 아닌 첫 단어로 한다. 없으면 세션, 있으면 **에이전트 자신의 `--help` Commands 목록**에 있는지 묻는다(새 명령도 코드 변경 없이 잡힌다). codex의 `exec`/`e`/`review`/`resume`/`fork`는 에이전트가 일하는 실행이라 세션으로 둔다. `--help`/`--version`류는 세션이 아니다. `--help`를 못 읽으면 비켜선다 — 덮지 못하는 손해가 명령을 깨뜨리는 손해보다 작다.
+  * 비용: 첫 단어가 있을 때만 `--help`를 한 번 부른다(claude 0.33초, codex 0.04초). `claude`, `claude --resume`, `codex` 같은 흔한 실행은 묻지 않는다.
+  * 알려진 한계: 값을 받는 옵션의 값이 첫 단어로 읽힌다(`codex -c k=v login`은 `k=v`를 보고 세션으로 판정). 그 값이 우연히 명령 이름과 같지 않으면 세션 쪽으로 기울 뿐이다.
+  * 검사: `tests/test_phase14_alias.py`(전체 계층) — 설치된 claude·codex의 `--help`에 나오는 **모든 명령**과 `--version`/`--help`를 pty에서 맨 실행과 `amask` 경유로 각각 돌려 출력 바이트와 종료코드를 비교한다(2.1.290·codex-cli 0.154.0에서 110건 통과, 14초). 수정을 되돌리면 54건이 실패한다 — `claude attach --help`가 하위 명령 대신 claude 전체 도움말을 내는 것도 그때 드러났다(D-025 이래의 잠복 버그). 에이전트가 없으면 건너뛰므로 CI에서는 돌지 않는다. `test_phase13_mod.py`에 판정 로직 케이스.

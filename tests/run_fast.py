@@ -17,6 +17,7 @@ SUITES = [
     ["test_phase8_inputline.py"],
     ["test_phase11_judge.py"],
     ["test_phase12_scrape.py"],
+    ["test_phase13_mod.py"],
     # The same suite as `run_all.py` runs, minus the cases that start a
     # runner: its TUI, config-file and protocol checks are pure.
     ["test_phase10_control.py", "--fast"],

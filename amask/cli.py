@@ -37,6 +37,7 @@ import os
 import re
 import select
 import signal
+import subprocess
 import sys
 import time
 
@@ -346,9 +347,12 @@ def main(argv=None):
         return _cmd_control(argv[1:])
 
     term = TerminalController()
-    if not term.is_tty:
+    if not term.is_tty or not _is_session(argv):
         # Nothing to hide, so the wrapper has nothing to add. Hand the process
         # over outright: exit code and signal disposition stay exact (P-101).
+        # The same for an agent's own commands -- `claude plugin test`, `codex
+        # login` -- so that an alias over the agent's name changes nothing
+        # about them (D-058).
         os.execvp(argv[0], argv)
 
     return Runner(term, argv).run()
@@ -663,11 +667,22 @@ class Runner:
         # without the token is not this runner's agent and is ignored.
         os.environ[hooks.ENV_VAR] = self.hooks.path
         os.environ[hooks.ENV_TOKEN] = self.hooks.token
-        if os.path.basename(argv[0]) != "claude" or "--settings" in argv:
+        os.environ[hooks.ENV_EMITTER] = self.hooks.emitter
+        if os.path.basename(argv[0]) != "claude" or _passes_settings(argv):
             # Not Claude Code, or the user is already passing settings of their
             # own -- leave the command line alone and rely on the heuristic.
+            # Claude Code keeps only the last --settings it is given, so
+            # adding ours would drop theirs or ours without a word. The mod
+            # stays off too: alone it can only ever say WAITING, and WAITING
+            # does not expire (D-030), so one interrupt would end covering
+            # for the rest of the session (D-056).
             return argv
-        return [argv[0], "--settings", self.hooks.settings_json()] + argv[1:]
+        mod = _mod_path()
+        use_mod = (not _is_print(argv) and os.path.isdir(mod)
+                   and _mod_supported(_claude_version(argv[0])))
+        _debug(f"mod: {'on' if use_mod else 'off'}")
+        return _wire_claude(argv, self.hooks.settings_json(),
+                            mod if use_mod else None)
 
     def _handle_hooks(self):
         for event in self.hooks.read_events():
@@ -1157,6 +1172,146 @@ def _emitter_path():
         "bin",
         "amask-hook",
     )
+
+
+def _mod_path():
+    """The Claude Code mod shipped next to this package (D-056)."""
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "mod",
+    )
+
+
+# The first Claude Code release measured to raise `turn.complete` with
+# `reason: 'aborted'` for a mod (D-056). 2.1.285 loads a mod but never raises
+# the turn events; below 2.1.250 there are no mods at all. Older releases
+# ignore `--plugin-dir` silently, so the gate is caution, not necessity.
+MOD_MIN_CLAUDE = (2, 1, 286)
+
+
+# Under `alias claude='amask claude'` every run of the agent's name comes
+# here, its own commands included. Only a session is wrapped; anything else is
+# handed over untouched (D-058). Agents not named here are wrapped as before.
+# For codex these commands are sessions too: they run the agent on a task.
+_SESSION_COMMANDS = {
+    "claude": frozenset(),
+    "codex": frozenset(("exec", "e", "review", "resume", "fork")),
+}
+
+# Asking the agent about itself is never a session.
+_INFO_FLAGS = frozenset(("-h", "--help", "-v", "-V", "--version"))
+
+_COMMAND_LINE = re.compile(r"^  ([a-z][\w-]*(?:\|[a-z][\w-]*)*)")
+_COMMAND_ALIASES = re.compile(r"\[aliases?: ([^\]]+)\]")
+
+
+def _parse_commands(help_text):
+    """The command names in an agent's `--help`, aliases included.
+
+    Both agents print a `Commands:` block, one command per line indented two
+    spaces: claude spells aliases `plugin|plugins`, codex `[aliases: e]`.
+    """
+    names = set()
+    inside = False
+    for line in help_text.splitlines():
+        if line.rstrip() == "Commands:":
+            inside = True
+            continue
+        if not inside:
+            continue
+        if line and not line.startswith(" "):
+            break
+        match = _COMMAND_LINE.match(line)
+        if match:
+            names.update(match.group(1).split("|"))
+        for aliases in _COMMAND_ALIASES.findall(line):
+            names.update(a.strip() for a in aliases.split(","))
+    return frozenset(names)
+
+
+def _agent_commands(binary):
+    """Ask the agent for its commands. Anything odd answers None."""
+    try:
+        done = subprocess.run([binary, "--help"], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    commands = _parse_commands(done.stdout)
+    return commands if done.returncode == 0 and commands else None
+
+
+def _is_session(argv, commands=_agent_commands):
+    """Whether this run is the agent working, which is all amask wraps.
+
+    The first word that is not an option is what both agents read as the
+    command. With none, it is a session; with one, the agent's own `--help`
+    says whether it is a command, so a command added in a later release is
+    recognised without a change here. When the agent cannot say, amask steps
+    aside: a run left unwrapped loses the rain, a command wrapped by mistake
+    can break.
+    """
+    agent = os.path.basename(argv[0])
+    if agent not in _SESSION_COMMANDS:
+        return True
+    if any(a in _INFO_FLAGS for a in argv[1:]):
+        return False
+    first = next((a for a in argv[1:] if not a.startswith("-")), None)
+    if first is None or first in _SESSION_COMMANDS[agent]:
+        return True
+    known = commands(argv[0])
+    if known is None:
+        return False
+    return first not in known
+
+
+def _passes_settings(argv):
+    """Whether the user's own command line already carries --settings."""
+    return any(a == "--settings" or a.startswith("--settings=") for a in argv[1:])
+
+
+def _is_print(argv):
+    """Whether this is a one-shot `claude -p` run.
+
+    The mod is for interactive sessions only. A print run has no ESC to
+    interrupt with, so the mod has nothing to report, and where the rollout
+    switch for mods is served off -- as it was for print runs when measured --
+    Claude Code says so on stderr, which would be ours to answer for (D-056).
+    """
+    return any(a in ("-p", "--print") for a in argv[1:])
+
+
+def _wire_claude(argv, settings_json, mod):
+    """The agent's command line with our hooks, and the mod when given one."""
+    extra = ["--settings", settings_json]
+    if mod:
+        extra += ["--plugin-dir", mod]
+    return [argv[0]] + extra + argv[1:]
+
+
+_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def _parse_version(text):
+    """The first X.Y.Z in `claude --version`'s output, or None."""
+    match = _VERSION.search(text or "")
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def _mod_supported(version):
+    """Whether this release raises what the mod listens for. Unknown is no."""
+    return version is not None and version >= MOD_MIN_CLAUDE
+
+
+def _claude_version(binary):
+    """Ask the agent binary its version. Anything odd answers None."""
+    try:
+        done = subprocess.run([binary, "--version"], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return _parse_version(done.stdout)
 
 
 def _short_path(path):

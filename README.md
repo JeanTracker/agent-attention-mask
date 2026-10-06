@@ -108,7 +108,10 @@ Codex fires no hooks, so there is nothing for the runner to wire up and no basen
 covering is judged from output timing alone (see How it works). The MODEL and TOKENS rows are
 scraped from claude's status line, so under codex they may stay blank.
 
-`command claude` or `command codex` still runs the agent unwrapped. Avoid a wrapper *script*
+Only a session is wrapped. The agents' own commands (`claude mcp`, `claude plugin test`,
+`codex login`, ...) and `--help`/`--version` are handed straight to the agent, so the alias
+changes nothing about them; the agent's own `--help` is what tells the runner which words
+are commands. `command claude` or `command codex` still runs the agent unwrapped. Avoid a wrapper *script*
 of the same name earlier on PATH: the runner launches the agent with `execvp`, which resolves
 the name through PATH again, finds the wrapper and calls back into amask forever.
 
@@ -134,6 +137,13 @@ hooks with `--settings`, so `bin/amask-hook` writes one line per event. `UserPro
 request, say), `Stop` and `SessionEnd` read as waiting and hand the screen back at once.
 `--settings` loads *in addition to* your own settings, so `~/.claude/settings.json` is
 neither read nor written, and the wiring lives only for that one process.
+
+One thing no hook says is that you interrupted a turn: ESC fires nothing, not even `Stop`, so
+the runner would believe the agent still working and put the rain back over an idle prompt.
+For that, an interactive `claude` 2.1.286 or newer also gets `--plugin-dir <clone>/mod`, a
+Claude Code mod that sees the turn end as aborted and says so on the same FIFO. It is left off
+for `claude -p`, for older releases (the runner asks `claude --version` first), and when you
+pass `--settings` yourself; there, pressing `q` after waking is still how you skip the turn.
 
 Any other agent can report the same way by writing one-line JSON to the FIFO named by
 `AMASK_HOOK_FIFO`, carrying the `AMASK_HOOK_TOKEN` value:
@@ -297,10 +307,10 @@ or without amask.
 ## Uninstall
 
 Remove the symlink, remove the alias from your rc file, delete the clone. Nothing is
-registered anywhere else: hook settings are passed on Claude Code's command line for that one
-run, and each runner's FIFO is unlinked when it exits. The one thing that outlives a session
-is `~/.amask` -- the `--config` defaults and the control sockets -- and `rm -rf ~/.amask` is
-safe once nothing is running.
+registered anywhere else: hook settings and the mod are passed on Claude Code's command line
+for that one run, and each runner's FIFO is unlinked when it exits. The one thing that
+outlives a session is `~/.amask` -- the `--config` defaults and the control sockets -- and
+`rm -rf ~/.amask` is safe once nothing is running.
 
 ## Development
 
@@ -309,10 +319,11 @@ python3 tests/run_fast.py    # ~2s, no terminal needed
 python3 tests/run_all.py     # ~12min, real ptys -- run it before you push
 ```
 
-Ten phase suites. Nine drive real ptys against the fixture agents in `tests/fixtures/`; the
-tenth drives the cover/uncover state machine directly, with time as an argument rather than
-something to wait for, and finishes in milliseconds (D-054). The fast tier is those cases
-plus everything else that needs no terminal.
+Thirteen phase suites. Most drive real ptys against the fixture agents in `tests/fixtures/`;
+`test_phase11_judge.py` drives the cover/uncover state machine directly, with time as an
+argument rather than something to wait for, and finishes in milliseconds (D-054). The fast
+tier is those cases plus everything else that needs no terminal. The mod under `mod/` has its
+own tests for `claude plugin test mod`.
 
 CI runs the fast tier on every pull request and the full suite on Linux and macOS once
 something lands on `master`, which is why the full one is yours to run first. Python floor

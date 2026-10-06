@@ -15,6 +15,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from harness import fixture, is_rain, run_in_pty
+from amask import hooks
 from amask.hooks import EVENT_MEANING, BUSY, WAITING, HookChannel
 from amask.hud import Hud
 
@@ -53,7 +54,9 @@ def test_settings_fragment_is_additive_and_complete():
     channel = HookChannel(EMITTER, path="/tmp/does-not-need-to-exist")
     settings = channel.settings()
     check("hooks 키만 담음", list(settings) == ["hooks"], str(list(settings)))
-    check("모든 이벤트 등록", set(settings["hooks"]) == set(EVENT_MEANING), str(set(settings["hooks"])))
+    expected = set(EVENT_MEANING) - set(hooks._FROM_MOD)
+    check("모든 이벤트 등록", set(settings["hooks"]) == expected, str(set(settings["hooks"])))
+    check("mod 전용 이벤트는 빠짐", "TurnAborted" not in settings["hooks"], str(set(settings["hooks"])))
     check("도구 이벤트에 matcher", settings["hooks"]["PreToolUse"][0].get("matcher") == "*", "없음")
     check("JSON 직렬화 가능", isinstance(json.loads(channel.settings_json()), dict))
 

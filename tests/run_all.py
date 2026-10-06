@@ -23,6 +23,8 @@ SUITES = [
     "test_phase10_control.py",
     "test_phase11_judge.py",
     "test_phase12_scrape.py",
+    "test_phase13_mod.py",
+    "test_phase14_alias.py",
 ]
 
 failed = []

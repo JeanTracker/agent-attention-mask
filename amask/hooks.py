@@ -37,7 +37,14 @@ EVENT_MEANING = {
     "Notification": WAITING,    # a permission prompt or similar (SC-003)
     "Stop": WAITING,            # the turn is finished
     "SessionEnd": WAITING,
+    # Not a Claude Code hook: amask's own mod (`mod/`) sends it, because an
+    # interrupted turn fires no hook at all -- not even Stop (D-036, D-056).
+    "TurnAborted": WAITING,
 }
+
+# Events that come from the mod rather than from settings. Claude Code has no
+# hook by these names, so they must stay out of the settings fragment.
+_FROM_MOD = ("TurnAborted",)
 
 # Events that need a matcher in the settings fragment, per Claude Code's schema.
 _MATCHED = ("PreToolUse", "PostToolUse")
@@ -47,6 +54,8 @@ _MATCHED = ("PreToolUse", "PostToolUse")
 # who, and an event without the right token is not from this runner's agent.
 ENV_VAR = "AMASK_HOOK_FIFO"
 ENV_TOKEN = "AMASK_HOOK_TOKEN"
+# The emitter, so the mod can reach the FIFO the same way the hooks do.
+ENV_EMITTER = "AMASK_HOOK_EMITTER"
 
 
 class HookChannel:
@@ -138,6 +147,8 @@ class HookChannel:
         """A Claude Code settings fragment pointing every event at the emitter."""
         hooks = {}
         for event in EVENT_MEANING:
+            if event in _FROM_MOD:
+                continue
             # Quoted: the emitter and FIFO paths come from wherever the user
             # cloned to, and a folder with a space in it would otherwise split
             # into two arguments and the hook would silently never fire.

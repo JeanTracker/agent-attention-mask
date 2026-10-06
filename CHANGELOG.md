@@ -11,6 +11,11 @@ The reasoning behind each judgement is recorded as a numbered entry in
 
 ### Added
 
+- **Interrupting claude no longer brings the rain back.** ESC fires no Claude Code hook, so
+  the runner used to keep believing the agent busy and cover the idle prompt again until
+  the 120 s hook stall ran out. An interactive `claude` 2.1.286 or newer now also loads a
+  small mod from `mod/` that reports the aborted turn on the same channel. Older releases,
+  `claude -p` and a `--settings` of your own keep the old behaviour, and `q` (D-056).
 - **The stored defaults are editable from `--top`.** `c` opens them on their own screen:
   `↑`/`↓` pick one of the three timing values, `+`/`-` move it, `0` forgets it again and
   `enter` writes the file. `esc` leaves without writing. As before, the file governs new
@@ -33,6 +38,15 @@ The reasoning behind each judgement is recorded as a numbered entry in
 - CI runs the suites on Linux and macOS against Python 3.13 only. The suite drives real
   ptys for minutes a job, and the axis that has ever caught anything twice is the OS; the
   3.11 floor is now checked by hand (D-053).
+
+### Fixed
+
+- **An alias over `claude` or `codex` no longer changes their own commands.** With
+  `alias claude='amask claude'`, `claude plugin test` refused to run and `claude attach
+  --help` printed the wrong help, because the runner wrapped them like a session. Anything
+  that is not a session -- the agent's commands, `--help`, `--version` -- is now handed
+  straight to the agent, and the agent's own `--help` is what says which words are commands,
+  so new ones are covered too (D-057, D-058).
 
 ## [0.1.0] - 2026-09-22
 

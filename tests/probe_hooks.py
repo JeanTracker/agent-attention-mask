@@ -12,6 +12,7 @@ in a file so field names can be inspected afterwards.
     python3 tests/probe_hooks.py "Reply with exactly: ok"
     python3 tests/probe_hooks.py --interrupt 12 "Write 800 words about rain"
     python3 tests/probe_hooks.py --statusline "Reply with exactly: ok"
+    python3 tests/probe_hooks.py --plugin-dir ./mod --interrupt 12 "..."
     python3 tests/probe_hooks.py --followup 10 "Reply with exactly: ok" \
         --total 120 "Launch a subagent that sleeps 45s, then reply: launched"
 
@@ -23,6 +24,11 @@ Claude Code's message queue rather than starting a turn of its own.
 That is the only way to observe what the session can do while background work
 it started is still running -- an injected task notification arrives too soon
 after `Stop` to leave a window worth watching.
+
+`--plugin-dir` loads a Claude Code plugin alongside the hooks, with
+`AMASK_PROBE_DUMPER` and `AMASK_PROBE_EVENTS` in its environment, so a plugin
+of function hooks can hand its own events to the same dumper and they land on
+the same timeline as the classic ones.
 
 Interactive Claude Code treats a fast burst of bytes as a paste, and a paste's
 trailing CR lands in the input box instead of submitting, so the prompt and its
@@ -98,7 +104,7 @@ def _script(body, directory, name):
 
 
 def probe(prompt, interrupt=None, statusline=False, total=180.0, cwd=None,
-          followup=None, queued=None):
+          followup=None, queued=None, plugin_dirs=()):
     work = tempfile.mkdtemp(prefix="probe-hooks-")
     events_path = os.path.join(work, "events.jsonl")
     status_path = os.path.join(work, "status.jsonl")
@@ -119,11 +125,15 @@ def probe(prompt, interrupt=None, statusline=False, total=180.0, cwd=None,
                                   "refreshInterval": 5}
 
     argv = ["claude", "--settings", json.dumps(settings, separators=(",", ":"))]
+    for directory in plugin_dirs:
+        argv += ["--plugin-dir", os.path.abspath(directory)]
     pid, master = pty.fork()
     if pid == 0:
         if cwd:
             os.chdir(cwd)
         os.environ["TERM"] = "xterm-256color"
+        os.environ["AMASK_PROBE_DUMPER"] = dumper
+        os.environ["AMASK_PROBE_EVENTS"] = events_path
         os.execvp(argv[0], argv)
         os._exit(127)
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
@@ -233,6 +243,7 @@ def main(argv):
     total = 180.0
     followup = None
     queued = None
+    plugin_dirs = []
     rest = []
     while argv:
         arg = argv.pop(0)
@@ -244,6 +255,8 @@ def main(argv):
             total = float(argv.pop(0))
         elif arg == "--followup":
             followup = (float(argv.pop(0)), argv.pop(0))
+        elif arg == "--plugin-dir":
+            plugin_dirs.append(argv.pop(0))
         elif arg == "--queued":
             queued = (float(argv.pop(0)), argv.pop(0))
         else:
@@ -252,7 +265,8 @@ def main(argv):
         print(__doc__.strip().splitlines()[0])
         return 2
     probe(" ".join(rest), interrupt=interrupt, statusline=statusline,
-          total=total, followup=followup, queued=queued)
+          total=total, followup=followup, queued=queued,
+          plugin_dirs=plugin_dirs)
     return 0
 
 
