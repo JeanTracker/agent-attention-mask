@@ -9,8 +9,18 @@ The reasoning behind each judgement is recorded as a numbered entry in
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-16
+
 ### Added
 
+- **`install.sh` installs, wires up and uninstalls.** `curl ... | sh` clones to
+  `~/.local/share/amask` instead of wherever you stand, replaces an old `amask` symlink, and
+  adds `~/.local/bin` to PATH in your rc file when it is missing. `--link`, `--path` and
+  `--uninstall` do what they say, and touch nothing in rc files outside one marked block
+  (D-059).
+- **`amask --wrap claude` / `amask --unwrap`.** Writes a shell function into the same block
+  that runs the agent under amask and falls back to the plain agent when amask is gone --
+  unlike the alias the README used to suggest, which left `claude` itself unrunnable (D-059).
 - **Interrupting claude no longer brings the rain back.** ESC fires no Claude Code hook, so
   the runner used to keep believing the agent busy and cover the idle prompt again until
   the 120 s hook stall ran out. An interactive `claude` 2.1.286 or newer now also loads a
@@ -41,6 +51,10 @@ The reasoning behind each judgement is recorded as a numbered entry in
 
 ### Fixed
 
+- **A moved or deleted clone no longer breaks every tool call.** Claude Code printed
+  `hook error ... amask-hook: No such file or directory` on each tool use for the rest of
+  the session. The hook command now says nothing when the emitter is gone, and a runner
+  started without one leaves hooks off (D-059).
 - **An alias over `claude` or `codex` no longer changes their own commands.** With
   `alias claude='amask claude'`, `claude plugin test` refused to run and `claude attach
   --help` printed the wrong help, because the runner wrapped them like a session. Anything
@@ -82,5 +96,6 @@ nine phase suites pass on Linux and macOS.
 - **CI.** The phase suites run on Linux and macOS against Python 3.11, 3.12 and 3.13.
 - **Licence.** MIT.
 
-[Unreleased]: https://github.com/JeanTracker/agent-attention-mask/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/JeanTracker/agent-attention-mask/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/JeanTracker/agent-attention-mask/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JeanTracker/agent-attention-mask/releases/tag/v0.1.0
