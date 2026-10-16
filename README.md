@@ -38,22 +38,38 @@ amask codex exec "make the tests pass"
 
 ## Install
 
-Python 3.11+ and an xterm-compatible terminal. There is no packaging step -- the clone is the
-installation.
+Python 3.11+, `git`, and an xterm-compatible terminal.
 
 ```sh
-git clone https://github.com/JeanTracker/agent-attention-mask.git amask && cd amask
-./bin/amask claude
+curl -fsSL https://raw.githubusercontent.com/JeanTracker/agent-attention-mask/master/install.sh | sh
 ```
 
-To call it from anywhere, symlink the launcher into a directory on your PATH:
+This clones to `~/.local/share/amask` -- not to wherever you happen to stand, where a
+project's own clean-up could take it away mid-session -- links `~/.local/bin/amask` to it,
+and if `~/.local/bin` is not on your PATH, adds it in your rc file. Running it again updates
+the clone. An `amask` symlink already in `~/.local/bin`, broken or pointing at another clone,
+is replaced; a regular file there is left alone and the install stops to say so.
 
-```sh
-ln -s "$PWD/bin/amask" ~/.local/bin/amask
-```
+Options go after `sh -s --` (`curl ... | sh -s -- --uninstall`), or to
+`~/.local/share/amask/install.sh` once installed:
 
-Leave the clone where it is: the launcher resolves the symlink back to it to find both the
-package and the hook emitter.
+| Option | Does |
+|---|---|
+| *(none)* | install or update, link, check PATH |
+| `--link` | only (re)create the `~/.local/bin/amask` symlink |
+| `--path` | only check PATH, adding `~/.local/bin` to the rc file if missing |
+| `--uninstall` | remove the clone, the symlink and everything written to rc files |
+
+To run an agent under amask without typing it, `amask --wrap claude` once installed (see
+[Wrapping an agent by default](#wrapping-an-agent-by-default)).
+
+`AMASK_HOME`, `AMASK_BIN` and `AMASK_RC` move the clone, the link and the rc file. The rc file
+is otherwise picked from `$SHELL`: `~/.zshrc`, `~/.bash_profile` on macOS or `~/.bashrc`
+elsewhere, and `~/.profile` for anything else. Whatever the installer writes there sits in one
+block between `# >>> amask >>>` and `# <<< amask <<<` -- `amask --wrap` writes to the same
+block -- and nothing outside it is touched.
+
+To work on amask itself, clone anywhere and run `./bin/amask claude` from the clone.
 
 If stdout is not a tty, there is no screen to hide, and the runner hands the process straight
 over with `execvp`.
@@ -66,6 +82,8 @@ amask --top                       # watch and steer every session on one screen
 amask --ls                        # list the running sessions
 amask --config [key=value...]     # show or set the stored defaults
 amask --ctl <pid|last> <command>  # status | get | set | skip | wake
+amask --wrap <agent>...           # run the agent under amask by default
+amask --unwrap [agent...]         # undo it; every agent if none is named
 amask --version
 ```
 
@@ -76,40 +94,35 @@ submits an empty prompt nor approves a pending confirmation.
 
 ### Wrapping an agent by default
 
-To have every session run covered without typing `amask`, alias the agent. What the alias
-should say depends on what the name already is, so ask first with `type claude` or
-`type codex`. Bash, zsh and ksh all take the same line; only the rc file differs --
-`~/.zshrc`, `~/.bashrc`, or `~/.bash_profile` for the login shell macOS Terminal starts.
-
-**`claude`.** If `type` answers with a path, the plain alias works:
+To have every session run covered without typing `amask`:
 
 ```sh
-alias claude='amask claude'
+amask --wrap claude          # or: amask --wrap claude codex
 ```
 
-If it answers with an alias of its own, you are on an older Claude Code install that points
-`claude` at a path not on PATH. Pass that path through instead, carrying over any flags the
-old alias had:
+This writes a shell function, not an alias, into the amask block of your rc file:
 
 ```sh
-alias claude='amask ~/.claude/local/claude'
+claude() {
+  if command -v amask >/dev/null 2>&1; then amask claude "$@"
+  else command claude "$@"; fi
+}
 ```
 
-Either way the argument's basename has to stay `claude`: that is what the runner matches on
-before it wires up its hooks, and a name that does not match falls back to timing heuristics.
+If amask is ever missing, `claude` still starts -- the agent is never held hostage by the
+screensaver. On an older Claude Code install where `claude` is not on PATH but
+`~/.claude/local/claude` is, the function calls that path instead; the basename stays
+`claude`, which is what the runner matches on before it wires up its hooks. An `alias claude=`
+left from an earlier version of this README is overridden by the block, and the installer
+points out its line so you can delete it. New shells pick the function up; `amask --unwrap
+claude` takes it out again, and `amask --unwrap` takes every wrapper out.
 
-**`codex`.** The plain alias is all there is to it:
-
-```sh
-alias codex='amask codex'
-```
-
-Codex fires no hooks, so there is nothing for the runner to wire up and no basename to keep:
-covering is judged from output timing alone (see How it works). The MODEL and TOKENS rows are
-scraped from claude's status line, so under codex they may stay blank.
+Codex fires no hooks, so there is nothing for the runner to wire up: covering is judged from
+output timing alone (see How it works). The MODEL and TOKENS rows are scraped from claude's
+status line, so under codex they may stay blank.
 
 Only a session is wrapped. The agents' own commands (`claude mcp`, `claude plugin test`,
-`codex login`, ...) and `--help`/`--version` are handed straight to the agent, so the alias
+`codex login`, ...) and `--help`/`--version` are handed straight to the agent, so the wrapper
 changes nothing about them; the agent's own `--help` is what tells the runner which words
 are commands. `command claude` or `command codex` still runs the agent unwrapped. Avoid a wrapper *script*
 of the same name earlier on PATH: the runner launches the agent with `execvp`, which resolves
@@ -306,20 +319,26 @@ or without amask.
 
 ## Uninstall
 
-Remove the symlink, remove the alias from your rc file, delete the clone. Nothing is
-registered anywhere else: hook settings and the mod are passed on Claude Code's command line
-for that one run, and each runner's FIFO is unlinked when it exits. The one thing that
-outlives a session is `~/.amask` -- the `--config` defaults and the control sockets -- and
-`rm -rf ~/.amask` is safe once nothing is running.
+```sh
+~/.local/share/amask/install.sh --uninstall
+```
+
+This removes the clone, the `~/.local/bin/amask` symlink and the amask block from every rc file
+it finds -- the wrapper functions and the PATH line with it. If the clone is already gone, the
+`curl ... | sh -s -- --uninstall` form still cleans up the rest. A clone with local changes,
+new files included, is not removed. Nothing else was ever registered: hook settings and the mod are
+passed on Claude Code's command line for that one run, and each runner's FIFO is unlinked
+when it exits. The one thing that outlives a session is `~/.amask` -- the `--config` defaults
+and the control sockets -- and `rm -rf ~/.amask` is safe once nothing is running.
 
 ## Development
 
 ```sh
-python3 tests/run_fast.py    # ~2s, no terminal needed
+python3 tests/run_fast.py    # ~10s, no terminal needed
 python3 tests/run_all.py     # ~12min, real ptys -- run it before you push
 ```
 
-Thirteen phase suites. Most drive real ptys against the fixture agents in `tests/fixtures/`;
+Fourteen phase suites. Most drive real ptys against the fixture agents in `tests/fixtures/`;
 `test_phase11_judge.py` drives the cover/uncover state machine directly, with time as an
 argument rather than something to wait for, and finishes in milliseconds (D-054). The fast
 tier is those cases plus everything else that needs no terminal. The mod under `mod/` has its

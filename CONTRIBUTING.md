@@ -41,7 +41,7 @@ condition — must pass.
 Two tiers, and the line between them is what a fake clock can stand in for (D-054).
 
 ```sh
-python3 tests/run_fast.py    # ~2s: the state machine and the layout functions
+python3 tests/run_fast.py    # ~10s: the state machine, layout functions, the installer
 python3 tests/run_all.py     # ~12min: the same, plus real runners on real ptys
 ```
 
@@ -51,7 +51,7 @@ terminal-layer guarantees — P-103's scrollback, SC-002's latency, the alternat
 sequences — are checked on your machine or not at all before the merge. A push that skips
 it is a push that finds out on `master`.
 
-`run_all.py` runs the 13 phase suites in order and exits non-zero if any one of them fails.
+`run_all.py` runs the 14 phase suites in order and exits non-zero if any one of them fails.
 Add an entry to the relevant suite for new behaviour: a judgement about *when* to cover
 belongs in `test_phase11_judge.py`, where time is an argument and a case costs a
 millisecond, and only what needs a terminal belongs in a pty suite. If you need something

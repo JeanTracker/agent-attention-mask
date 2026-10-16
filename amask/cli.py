@@ -58,6 +58,8 @@ USAGE = """usage: amask <agent command> [args...]
        amask --config [key=value...]   show or set the stored defaults (new sessions)
        amask --ctl <pid|last> <command> [key=value...]
                                        status | get | set | skip | wake
+       amask --wrap <agent>...         run the agent under amask by default (rc file)
+       amask --unwrap [agent...]       undo --wrap; every agent if none is named
        amask --version                 print the version"""
 
 # select() timeout: the animation tick, and how fast SIGWINCH/SIGCHLD flags are
@@ -345,6 +347,11 @@ def main(argv=None):
         return _cmd_list()
     if argv[0] == "--ctl":
         return _cmd_control(argv[1:])
+    if argv[0] in ("--wrap", "--unwrap"):
+        from . import install
+
+        main_for = install.wrap_main if argv[0] == "--wrap" else install.unwrap_main
+        return main_for(argv[1:])
 
     term = TerminalController()
     if not term.is_tty or not _is_session(argv):
@@ -661,6 +668,11 @@ class Runner:
         The FIFO path also goes into the environment, so any agent can report
         its own state without a settings file.
         """
+        if not os.access(self.hooks.emitter, os.X_OK):
+            # A partial copy without `bin/`: no hook could ever report, so the
+            # timing heuristic is all there is.
+            _debug(f"hooks: off, no emitter at {self.hooks.emitter}")
+            return argv
         if not self.hooks.open():
             return argv
         # The child inherits both halves; anything that finds the FIFO
