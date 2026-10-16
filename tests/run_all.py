@@ -25,6 +25,7 @@ SUITES = [
     "test_phase12_scrape.py",
     "test_phase13_mod.py",
     "test_phase14_alias.py",
+    "test_phase15_install.py",
 ]
 
 failed = []

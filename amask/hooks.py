@@ -152,8 +152,13 @@ class HookChannel:
             # Quoted: the emitter and FIFO paths come from wherever the user
             # cloned to, and a folder with a space in it would otherwise split
             # into two arguments and the hook would silently never fire.
-            command = " ".join(shlex.quote(part) for part in
-                               (self.emitter, self.path, event, self.token))
+            call = " ".join(shlex.quote(part) for part in
+                            (self.emitter, self.path, event, self.token))
+            # Guarded: the path is fixed when the session starts, and if the
+            # clone is moved or deleted while it runs, a bare call would make
+            # Claude Code print a hook error on every tool use (P-101).
+            # `[ ! -x ] ||` exits 0 when the emitter is gone; `&&` would not.
+            command = f"[ ! -x {shlex.quote(self.emitter)} ] || {call}"
             entry = {"hooks": [{"type": "command", "command": command}]}
             if event in _MATCHED:
                 entry["matcher"] = "*"
