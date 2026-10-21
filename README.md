@@ -118,8 +118,10 @@ points out its line so you can delete it. New shells pick the function up; `amas
 claude` takes it out again, and `amask --unwrap` takes every wrapper out.
 
 Codex fires no hooks, so there is nothing for the runner to wire up: covering is judged from
-output timing alone (see How it works). The MODEL and TOKENS rows are scraped from claude's
-status line, so under codex they may stay blank.
+output timing alone (see How it works). The MODEL row is what claude's `SessionStart` hook
+names, so it is exact for the model the session started with; a `/model` switch mid-session
+fires no hook and is not picked up. TOKENS, and MODEL for an agent without hooks, are
+scraped from the agent's own status line, so under codex they may stay blank.
 
 Only a session is wrapped. The agents' own commands (`claude mcp`, `claude plugin test`,
 `codex login`, ...) and `--help`/`--version` are handed straight to the agent, so the wrapper

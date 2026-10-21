@@ -49,6 +49,9 @@ def play():
 
 
 sys.stdout.write("ready\n")
+# Something that looks like a status line, when a test wants the scrape to
+# have a candidate it would otherwise prefer (D-061).
+sys.stdout.write(os.environ.get("HOOKED_BANNER", ""))
 sys.stdout.flush()
 
 

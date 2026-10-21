@@ -43,11 +43,17 @@ def test_channel_carries_events():
     check("FIFO 생성", channel.open(), "생성 실패")
     subprocess.run([EMITTER, channel.path, "PreToolUse"], input=b'{"tool_name":"Bash"}')
     subprocess.run([EMITTER, channel.path, "Stop"], input=b"{}")
+    subprocess.run([EMITTER, channel.path, "SessionStart"],
+                   input=b'{"model":"claude-opus-5-5","source":"startup","cwd":"/x"}')
     time.sleep(0.2)
     events = channel.read_events()
     channel.close()
-    check("이벤트 수신", [e.get("event") for e in events] == ["PreToolUse", "Stop"], str(events))
+    check("이벤트 수신", [e.get("event") for e in events] == ["PreToolUse", "Stop", "SessionStart"],
+          str(events))
     check("페이로드 필드 보존", events and events[0].get("tool_name") == "Bash", str(events[:1]))
+    check("SessionStart의 model이 전달됨 (D-061)",
+          len(events) == 3 and events[2].get("model") == "claude-opus-5-5", str(events[2:]))
+    check("관심 없는 필드는 거름", len(events) == 3 and "cwd" not in events[2], str(events[2:]))
 
 
 def test_settings_fragment_is_additive_and_complete():
@@ -58,6 +64,8 @@ def test_settings_fragment_is_additive_and_complete():
     check("모든 이벤트 등록", set(settings["hooks"]) == expected, str(set(settings["hooks"])))
     check("mod 전용 이벤트는 빠짐", "TurnAborted" not in settings["hooks"], str(set(settings["hooks"])))
     check("도구 이벤트에 matcher", settings["hooks"]["PreToolUse"][0].get("matcher") == "*", "없음")
+    check("SessionStart 등록, matcher 포함 (D-061)",
+          settings["hooks"].get("SessionStart", [{}])[0].get("matcher") == "*", "없음")
     check("JSON 직렬화 가능", isinstance(json.loads(channel.settings_json()), dict))
 
 

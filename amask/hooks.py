@@ -30,6 +30,9 @@ BUSY = "busy"
 WAITING = "waiting"
 
 EVENT_MEANING = {
+    # Says nothing about the screen -- the agent is at its prompt either way
+    # -- but it is the one hook that names the model, exactly (D-061).
+    "SessionStart": None,
     "UserPromptSubmit": BUSY,   # the user just handed it work
     "PreToolUse": BUSY,         # still working, and about to do something
     "PostToolUse": BUSY,
@@ -47,7 +50,9 @@ EVENT_MEANING = {
 _FROM_MOD = ("TurnAborted",)
 
 # Events that need a matcher in the settings fragment, per Claude Code's schema.
-_MATCHED = ("PreToolUse", "PostToolUse")
+# SessionStart's matcher selects on `source` (startup, resume, clear, compact);
+# "*" takes them all, so a `/clear` mid-session reports the model again.
+_MATCHED = ("PreToolUse", "PostToolUse", "SessionStart")
 
 # What the child is told, so any agent -- not just Claude Code -- can report
 # its own state. Both halves are needed: the path says where, the token says

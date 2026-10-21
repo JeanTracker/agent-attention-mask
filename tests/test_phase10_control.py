@@ -58,6 +58,11 @@ def _seq_run(seq, total=14, timeout=20, feed=(), act=(), **env):
 
 
 BUSY_TURN = [
+    [0.1, "SessionStart", {"model": "claude-opus-5-5", "source": "startup"}],
+    # A subagent on another model, should its hook ever carry one, must not
+    # relabel the session.
+    [0.2, "SubagentStop", {"prompt_id": "p0", "agent_id": "ae4865d65c745a4f0",
+                           "model": "claude-haiku-5"}],
     [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "레인 색을 고쳐줘",
                                "session_id": "sess-abc"}],
     [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
@@ -202,7 +207,10 @@ def test_status_reports_what_the_screen_is_doing():
     def look(pid):
         return _ask(pid, {"cmd": "status"})
 
-    res = _seq_run(BUSY_TURN, total=8, timeout=16, act=[(3.0, look)])
+    # The banner is what the scrape would rank highest -- it carries a context
+    # window -- and it still must not displace the model the hook named.
+    res = _seq_run(BUSY_TURN, total=8, timeout=16, act=[(3.0, look)],
+                   HOOKED_BANNER="Sonnet 5.5 (1M context)")
     reply = res.acts[0][1] if res.acts else None
     check("status가 응답한다", isinstance(reply, dict) and reply.get("ok"), str(reply))
     if not (isinstance(reply, dict) and reply.get("ok")):
@@ -215,6 +223,8 @@ def test_status_reports_what_the_screen_is_doing():
           status["prompt"] == "레인 색을 고쳐줘", repr(status["prompt"]))
     check("에이전트의 session_id를 보고한다", status["session_id"] == "sess-abc",
           repr(status["session_id"]))
+    check("SessionStart가 말한 모델을 보고한다, 서브에이전트·화면의 다른 이름보다 먼저 (D-061)",
+          status["model"] == "Opus 5.5", repr(status["model"]))
     check("숨긴 바이트 수를 보고한다", isinstance(status["hidden_bytes"], int),
           str(status["hidden_bytes"]))
     check("현재 설정을 함께 보고한다",

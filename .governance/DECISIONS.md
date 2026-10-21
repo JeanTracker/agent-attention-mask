@@ -405,3 +405,19 @@
   * **증상 자체도 막았다**: ① 훅 명령을 `[ ! -x <emitter> ] || <emitter> ...`로 감쌌다 — 세션 도중 emitter가 사라져도 종료코드 0, stderr 없음(`&&` 형태는 1로 끝나 Claude Code가 여전히 에러 줄을 찍는다). ② 시작 시 emitter가 실행 가능하지 않으면 훅을 아예 붙이지 않고 타이밍 휴리스틱으로 돈다(D-025의 폴백 순서 그대로).
   * **남는 것**: `install.sh`가 블록에 넣는 PATH 줄은 설치 시점 셸의 `$PATH` 기준이라, 다른 셸에서 설치하면 그 셸의 rc만 고친다.
   * 검사: `tests/test_phase15_install.py`(빠른·전체 계층) — 임시 HOME과 작업 트리로 만든 로컬 저장소로 `curl | sh` 경로, 재설치, 세 종류의 기존 `amask`, wrap 멱등성, bash·zsh에서 옛 alias와 함께 source해도 함수가 정의되고 amask 유무 양쪽으로 동작, unwrap·uninstall이 블록 밖을 건드리지 않음, 수정된 clone 거부, clone 없는 uninstall, 사라진 emitter의 훅 명령이 조용함.
+* **D-060**: MODEL 스크레이핑 순위에서 **길이를 뺀다**. 같은 모양끼리는 **먼저 본 이름이 남는다** — D-055의 순위에서 이탈 (결정일: 2026-10-21)
+  * 사용자 신고: `pass_workspace`에서 돌린 claude의 기본 모델은 opus인데, amask 패널의 MODEL 칸에 계속 `Sonnet 5.5`가 떴다. 실제 세션(pid 17648)의 transcript를 보니 assistant 메시지 718건이 모두 `claude-opus-5-5`였다. 틀린 것은 표시뿐이다.
+  * **원인**: 순위가 `(컨텍스트 창 있음, 공백 있음, 길이)`였다. 사용자 status line(`~/.claude/statusline-command.sh`)은 버전을 떼고 `[Opus | Max]`만 그려서, 버전이 붙은 이름은 splash의 `Opus 5.5`에만 나온다. 그 세션 화면에 모델 ID 목록(`Opus 5.5: 'claude-opus-5-5', Sonnet 5.5: ...`)이 출력되자, 앞의 두 칸이 같은 `Sonnet 5.5`가 두 글자 길어서 이겼다. 이전 값을 계속 들고 있으므로 한 번 바뀐 값은 돌아오지 않는다. Opus가 계열 이름 중 가장 짧아서, D-055가 적어 둔 "남는 구멍"이 가장 흔한 경우에서 터졌다.
+  * **바꾼 것**: `_model_rank`가 `(컨텍스트 창 있음, 공백 있음)`만 본다. `>`로만 교체하므로 순위가 같으면 처음 본 이름(splash)이 남는다. 빈 값은 `GPT-5`처럼 공백도 창도 없는 이름보다 아래에 둔다.
+  * **잃는 것**: 세션 도중 `/model`로 바꾸면, status line이 더 나은 모양(컨텍스트 창이 붙은 이름)을 그리지 않는 한 패널은 처음 이름을 유지한다. 이전에도 짧은 이름으로 바꾸면 갱신되지 않았다.
+  * **고르지 않은 것**: 같은 순위에서 *가장 최근* 이름을 고르는 방식. 기본 status line이 매번 이름을 다시 그린다면 맞지만, 이 사용자의 status line은 버전 붙은 이름을 그리지 않으므로 마지막으로 화면에 나온 산문이 이긴다.
+  * **남는 구멍**: 스크레이핑은 여전히 화면 바이트를 추측하는 것이다. 근본적인 해법은 D-025의 순서대로 구조화된 출처(훅 payload나 mod 이벤트의 model 필드)에서 받는 것이지만, 2.1.301에서 그런 필드가 오는지는 재지 않았다. 다음에 `tests/probe_hooks.py`로 잰다.
+  * 검사: `tests/test_phase12_scrape.py`에 신고된 경우와 "같은 모양이면 먼저 본 것", "컨텍스트 창은 여전히 이름을 올린다"를 추가했다. 계열별 검사는 한 줄에 셋을 섞지 않고 따로 확인한다.
+* **D-061**: MODEL은 **`SessionStart` 훅의 `model`을 먼저 쓰고**, 스크레이핑은 훅이 없을 때만 (결정일: 2026-10-21)
+  * D-025의 순서(훅이 먼저, 타이밍·화면 추측은 fallback)를 모델 칸에도 적용한 것이다. 스크레이핑은 화면 바이트에서 이름을 추측하는 것이라, 같은 날 Opus 세션이 `Sonnet 5.5`(D-060)와 `Gemini 2.5`(테스트 출력이 긁힘)로 표시됐다.
+  * **실측 (Claude Code 2.1.306, `tests/probe_hooks.py`)**: `SessionStart` payload에 `model: "claude-opus-5-5"`(정확한 ID)가 있다. 다른 classic 훅과 mod 이벤트에는 없다. 사용자가 이 세션에서 실제로 `/model`을 실행했을 때 어떤 훅도 오지 않았고, transcript의 `message.model`만 `claude-opus-5-5` → `claude-fable-5-1`로 바뀌었다.
+  * **바꾼 것**: ① `EVENT_MEANING["SessionStart"] = None` — 상태 의미는 없고(에이전트는 어차피 프롬프트에 있다) settings 조각에만 들어간다. 러너는 의미 없는 이벤트도 `model`은 읽은 뒤 건너뛴다. matcher `*`(source가 startup·resume·clear·compact 어느 것이든). ② `bin/amask-hook`의 `KEEP`에 `model`. ③ 러너가 훅에서 model을 받으면 `_model_from_hook`을 세워 이후 스크레이핑이 MODEL을 건드리지 않는다. TOKENS 스크레이핑은 그대로다. ④ `_model_label`이 `claude-<family>-<n>-<n>(-<date>)?(\[..\])?` 모양만 `Opus 5.5`처럼 바꾼다. 그 외 ID는 온 그대로 보여 준다(D-016: 추측하지 않는다).
+  * **잃는 것**: 세션 도중 `/model` 전환은 반영되지 않는다 — 훅이 없다. 따라가려면 훅이 매번 주는 `transcript_path`의 마지막 assistant 메시지 `model`을 읽어야 하는데, 에이전트의 대화 기록 파일을 읽는 것은 새 정책이라 혼자 정하지 않았다(`HUMAN_REVIEW_QUEUE.md`). 사용자 지시: "일단 훅만 적용".
+  * 또 하나: 훅의 ID에는 컨텍스트 창이 없어 `(1M context)` 표기는 사라진다. `[1m]` 접미사가 ID에 붙어 오면 그대로 보인다.
+  * **실물 확인**: `bin/amask claude`를 pty에서 띄워 소켓으로 `status`를 물으니 `model: 'Fable 5.1'`, 디버그 로그에 `hook SessionStart: model 'claude-fable-5-1'`.
+  * 검사: phase9(settings 조각에 SessionStart+matcher, emitter가 model 전달·`cwd`는 거름), phase10(`status.model`이 훅 값이고, 컨텍스트 창을 단 더 높은 순위의 화면 이름 `Sonnet 5.5 (1M context)`에도 밀리지 않음 — `hooked_seq.py`의 `HOOKED_BANNER`), phase12(`_model_label` 7건).

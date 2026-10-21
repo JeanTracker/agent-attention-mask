@@ -357,3 +357,13 @@
   - 검증: `python3 tests/run_all.py` **14개 스위트 전부 통과, 종료코드 0**(PASS 954, FAIL 0, 로컬 macOS, 2026-10-16). `python3 tests/run_fast.py` 통과(10.5초 — phase15가 git clone·셸을 띄워 약 2초에서 늘었다). `dash -n install.sh` 통과. 이후 `--untracked-files=no` 되돌림과 자기 삭제 케이스 추가 뒤 phase15 단독 재실행 통과.
   - 이어서(같은 날, 사용자 지시): `--wrap`/`--unwrap`을 `install.sh`에서 빼고 `amask --wrap`/`amask --unwrap`으로 옮겼다. phase15를 설치된 링크로 `amask`를 부르도록 고치고, 이름 없는 `--unwrap`, 인자 없는 `--wrap`(종료코드 2), `install.sh --wrap` 거부를 추가했다.
   - 재검증(2026-10-16, `amask --wrap` 이전 뒤): `python3 tests/run_all.py` 14개 스위트 중 13개 통과, PASS 957 / FAIL 1 — phase6 `복귀 후 지연 ≈ 최초 지연`(1.09s vs 1.83s). 같은 시간에 샌드박스 설치 데모와 phase15를 병행해 부하가 있었다. phase6 단독 3회 연속 전부 통과(24/24). 09-28에 기록한 것과 같은 계열의 타이밍 flake로 보고, 이번 변경(설치·래핑·훅 명령 가드)과는 경로가 겹치지 않는다. `python3 tests/run_fast.py` 통과. 버전 0.2.0.
+- **MODEL 표시가 Opus 세션에서 Sonnet (2026-10-21, D-060)**: 사용자 신고. 원인은 `_model_rank`의 길이 tiebreak다(`Sonnet 5.5` > `Opus 5.5`). 길이를 빼고 같은 순위면 먼저 본 이름을 유지하게 했다. `test_phase12_scrape.py`에 3건 추가.
+  - 검증: `python3 tests/run_fast.py` 통과(로컬 macOS, 2026-10-21). model 칸을 쓰는 터미널 계층 스위트 `test_phase7_presentation.py`를 단독으로 돌려 통과. 14개 스위트 전체(`run_all.py`)는 아직 돌리지 않았다.
+- **모델의 구조화된 출처 실측 (2026-10-21, Claude Code 2.1.306, D-060의 남는 구멍)**: `tests/probe_hooks.py --plugin-dir ./mod "Reply with exactly: ok"`.
+  - `SessionStart` payload에 `model: "claude-opus-5-5"`(정확한 ID)와 `source: "startup"`이 온다. 다른 classic 훅(`UserPromptSubmit`·`Stop`·`MessageDisplay`·`Notification`)에는 `model`이 없다. `Stop`에는 `effort: {"level": "medium"}`이 있다. 모든 훅에 `transcript_path`가 있다.
+  - `--followup 5 "/model sonnet"`: 전환 뒤 어떤 훅도 오지 않았다. 다만 probe 세션의 transcript가 남지 않아 전환이 실제로 적용됐는지는 확인하지 못했다.
+  - amask는 아직 `SessionStart`를 붙이지 않고, `bin/amask-hook`의 `KEEP`에도 `model`이 없다. 구현은 하지 않았다.
+  - 이어서(같은 날, 사용자가 이 세션에서 실제로 `/model` 실행): transcript `message.model`은 06:01:58의 다음 assistant 메시지부터 `claude-opus-5-5` → `claude-fable-5-1`로 바뀌어 기록됐다 — 전환을 따라가는 출처로 쓸 수 있다. 같은 세션의 amask 패널(pid 87585, 수정 전 코드)은 `Gemini 2.5`를 보여 주고 있었다 — 테스트 출력에 찍힌 `Gemini 2.5 Pro`가 긁힌 것으로, D-060과 같은 계열의 오표시 세 번째 사례.
+- **MODEL을 SessionStart 훅에서 받음 (2026-10-21, D-061)**: 사용자 지시("일단 훅만 적용"). `EVENT_MEANING["SessionStart"]=None`(matcher `*`), emitter `KEEP`에 `model`, 러너는 훅이 준 모델을 `_model_label`로 써 넣고 이후 스크레이핑은 MODEL을 건드리지 않는다. `/model` 전환은 훅이 없어 반영되지 않는다 — transcript를 읽을지는 HRQ-008. 실물: `bin/amask claude`를 pty에서 띄워 소켓 `status`로 `model: 'Fable 5.1'` 확인(2.1.306).
+  - 검증: `python3 tests/run_all.py` **14개 스위트 전부 통과, 종료코드 0**(PASS 974, FAIL 0, 로컬 macOS, 2026-10-21). 그 뒤 서브에이전트 훅의 `model`을 무시하는 한 줄 가드와 phase10 검사 1건을 더했고, 빠른 계층·phase9·phase10을 다시 돌렸다(아래).
+  - 재검증(가드 추가 뒤, 2026-10-21): `python3 tests/run_fast.py` 통과, `test_phase9_hooks.py` 통과, `test_phase10_control.py` 통과(서브에이전트 `model` 무시 검사 포함).

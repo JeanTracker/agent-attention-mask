@@ -507,6 +507,7 @@ class Runner:
         self._agent_modes = {}  # private modes the agent turned on or off
         self._typing = InputLine()  # what the user is typing, for the HUD
         self._chrome = bytearray()  # recent agent text, for scraping its status
+        self._model_from_hook = False  # once a hook named it, stop scraping it
         self._frame = 0
         self.hud = Hud(" ".join(argv), _short_path(os.getcwd()))
         self.hooks = hooks.HookChannel(_emitter_path())
@@ -704,7 +705,25 @@ class Runner:
                 _debug(f"hook rejected: {event.get('event')}")
                 continue
             name = event.get("event")
-            meaning = hooks.EVENT_MEANING.get(name)
+            if name not in hooks.EVENT_MEANING:
+                continue
+            meaning = hooks.EVENT_MEANING[name]
+
+            model = event.get("model")
+            if model and not event.get("agent_id"):
+                # Not from a subagent: one running a different model must
+                # not relabel the main session, and once set the name is
+                # not scraped back (D-033 for the model field).
+                # The agent's own word on which model it runs, so it beats
+                # whatever the screen scrape found or will find: the scrape
+                # has relabelled an Opus session as Sonnet and as Gemini
+                # from model names that merely appeared in a reply (D-060,
+                # D-061). A `/model` switch fires no hook, so this is the
+                # model at session start.
+                self.hud.model = _model_label(str(model))
+                self._model_from_hook = True
+                _debug(f"hook {name}: model {model!r}")
+
             if meaning is None:
                 continue
             prompt_id = event.get("prompt_id")
@@ -951,7 +970,8 @@ class Runner:
         # between them. Take every candidate and keep the readable one --
         # searching for just the first match always returned whichever sat
         # earlier in the buffer, which was the squashed one.
-        self.hud.model = _pick_model(self._chrome, self.hud.model)
+        if not self._model_from_hook:
+            self.hud.model = _pick_model(self._chrome, self.hud.model)
         # The last match, not the first: the count only goes up, and the buffer
         # holds every value the status line has shown. Taking the first match
         # pinned the panel to the oldest one still in the window -- measured,
@@ -1142,15 +1162,36 @@ def _pick_model(text, current=""):
     return best
 
 
+_MODEL_ID = re.compile(r"^claude-([a-z]+)-(\d{1,2}(?:-\d{1,2})*)(?:-\d{8})?(\[.*\])?$")
+
+
+def _model_label(model_id):
+    """`claude-opus-5-5` as the panel writes it: `Opus 5.5`.
+
+    Only the one id shape Claude Code uses is rewritten -- family, version
+    parts joined by dashes, an optional date stamp, an optional `[1m]`-style
+    suffix. Anything else is shown as it came, not guessed at.
+    """
+    match = _MODEL_ID.match(model_id)
+    if not match:
+        return model_id
+    family, version, suffix = match.groups()
+    return f"{family.capitalize()} {version.replace('-', '.')}{suffix or ''}"
+
+
 def _model_rank(name):
     """How presentable a scraped model name is: spaced beats squashed.
 
     A name carrying its context window ranks above one without: that is the
     status line's own form, and reply text rarely spells it out (D-055).
+    Length is not in it: "Sonnet 5.5" outranked a real "Opus 5.5" by two
+    letters, so a reply that listed model names relabelled an Opus session.
+    Between equal shapes the name seen first stays -- that is the splash's,
+    and a custom status line may never draw the name again (D-060).
     """
     if not name:
-        return (0, 0, 0)
-    return ("context" in name, " " in name, len(name))
+        return (-1, -1)  # below "GPT-5", which has neither a space nor a window
+    return ("context" in name, " " in name)
 
 
 _DEBUG = os.environ.get("AMASK_DEBUG")

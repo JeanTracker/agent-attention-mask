@@ -16,9 +16,11 @@ import sys
 # agent_id marks an event fired inside a subagent, which is how the runner
 # tells a subagent's activity from the main thread's (D-033). prompt_id and
 # notification_type are here for the debug log, which has to be able to tell
-# the three state inputs apart.
+# the three state inputs apart. model is the exact model id that SessionStart
+# carries, which the panel prefers to anything scraped off the screen (D-061).
 KEEP = ("session_id", "tool_name", "message", "prompt", "prompt_id",
-        "agent_id", "agent_type", "notification_type", "stop_hook_active")
+        "agent_id", "agent_type", "notification_type", "stop_hook_active",
+        "model")
 
 
 def main():
