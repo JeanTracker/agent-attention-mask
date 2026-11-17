@@ -259,6 +259,46 @@ def test_next_real_turn_still_covers():
           "p2가 시작됐는데도 덮이지 않음")
 
 
+def test_a_plugin_question_never_covers():
+    """`/langprobe`'s `$.ui.ask`, as measured (D-062): no turn around it.
+
+    PreToolUse/PostToolUse(AskUserQuestion) with no UserPromptSubmit before and
+    no Stop after. Read as work, it covered the question 4s in and, once
+    answered, stayed covered until `hook_stall`.
+    """
+    res = _seq_run([
+        [0.3, "PreToolUse", {"prompt_id": "q1", "tool_name": "AskUserQuestion"}],
+        [2.3, "PostToolUse", {"prompt_id": "q1", "tool_name": "AskUserQuestion"}],
+    ], total=10)
+    rain = [t for t, chunk in res.timeline if is_rain(chunk)]
+    check("플러그인 질문 창은 덮이지 않는다 (답한 뒤에도)",
+          not rain, f"덮임 t={rain[0] if rain else None}")
+
+
+def test_the_model_question_uncovers_at_once():
+    """The model's own AskUserQuestion: the turn was covered, the question is not.
+
+    Measured: Notification lands ~6s after PreToolUse, so until now the
+    question sat under the rain for about two seconds past OVERLAY_DELAY.
+    """
+    res = _seq_run([
+        [0.3, "UserPromptSubmit", {"prompt_id": "p1", "prompt": "빨강 파랑 물어봐"}],
+        [0.5, "PreToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+        [5.0, "PostToolUse", {"prompt_id": "p1", "tool_name": "Bash"}],
+        [5.2, "PreToolUse", {"prompt_id": "p1", "tool_name": "AskUserQuestion"}],
+        [11.4, "Notification", {"prompt_id": "p1", "notification_type": "permission_prompt"}],
+    ], total=13)
+    check("질문 전 작업은 덮였다 (전제)",
+          any(is_rain(chunk) for t, chunk in res.timeline if t < 5.2),
+          "작업 중에도 덮이지 않아 이 케이스가 무의미하다")
+    exits = [t for t, chunk in res.timeline if ALT_EXIT in chunk and t >= 5.2]
+    check("질문이 뜨면 곧바로 깨어난다",
+          exits and exits[0] < 6.2, f"복귀 t={exits[0] if exits else None}")
+    after = [t for t, chunk in res.timeline if is_rain(chunk) and t > 6.5]
+    check("질문이 떠 있는 동안 다시 덮이지 않는다",
+          not after, f"재진입 t={after[0] if after else None}")
+
+
 def test_background_subagent_tool_call_is_not_main_state():
     """The spec's rule is about agent_id, not about one event name.
 

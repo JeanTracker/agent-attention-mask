@@ -707,7 +707,9 @@ class Runner:
             name = event.get("event")
             if name not in hooks.EVENT_MEANING:
                 continue
-            meaning = hooks.EVENT_MEANING[name]
+            # A question to the user is a tool call to Claude Code, and must
+            # not read as work (D-062).
+            meaning = hooks.meaning(name, event.get("tool_name"))
 
             model = event.get("model")
             if model and not event.get("agent_id"):

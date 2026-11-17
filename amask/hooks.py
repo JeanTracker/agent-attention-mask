@@ -45,6 +45,28 @@ EVENT_MEANING = {
     "TurnAborted": WAITING,
 }
 
+# Tool calls whose hooks mean the opposite of a tool call (D-062). Claude Code
+# renders a question to the user -- the model's own AskUserQuestion, and a
+# plugin's `$.ui.ask`, which surfaces as the same tool -- as a tool call, so
+# PreToolUse fired BUSY while the screen was asking something. Notification
+# only follows ~6s later, after OVERLAY_DELAY has already covered the question,
+# and not at all if the question is answered or dismissed first. A plugin's
+# question has no turn around it either: no UserPromptSubmit before and no Stop
+# after, so a BUSY from PostToolUse would latch until `hook_stall`. None means
+# "says nothing about the screen", same as SessionStart.
+TOOL_MEANING = {
+    "AskUserQuestion": {"PreToolUse": WAITING, "PostToolUse": None},
+}
+
+
+def meaning(event, tool_name=None):
+    """What one hook says about the screen: BUSY, WAITING or None."""
+    override = TOOL_MEANING.get(tool_name or "", {})
+    if event in override:
+        return override[event]
+    return EVENT_MEANING.get(event)
+
+
 # Events that come from the mod rather than from settings. Claude Code has no
 # hook by these names, so they must stay out of the settings fragment.
 _FROM_MOD = ("TurnAborted",)

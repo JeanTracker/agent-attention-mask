@@ -421,3 +421,12 @@
   * 또 하나: 훅의 ID에는 컨텍스트 창이 없어 `(1M context)` 표기는 사라진다. `[1m]` 접미사가 ID에 붙어 오면 그대로 보인다.
   * **실물 확인**: `bin/amask claude`를 pty에서 띄워 소켓으로 `status`를 물으니 `model: 'Fable 5.1'`, 디버그 로그에 `hook SessionStart: model 'claude-fable-5-1'`.
   * 검사: phase9(settings 조각에 SessionStart+matcher, emitter가 model 전달·`cwd`는 거름), phase10(`status.model`이 훅 값이고, 컨텍스트 창을 단 더 높은 순위의 화면 이름 `Sonnet 5.5 (1M context)`에도 밀리지 않음 — `hooked_seq.py`의 `HOOKED_BANNER`), phase12(`_model_label` 7건).
+* **D-062**: `AskUserQuestion` 도구의 훅은 **작업이 아니다**. `PreToolUse`는 WAITING, `PostToolUse`는 상태를 바꾸지 않는다 — D-025의 매핑(`PreToolUse`/`PostToolUse` → 작업 중)에서 이탈 (결정일: 2026-11-17)
+  * 사용자 신고: 날씨를 묻던 세션(pid 90363, `--plugin-dir langprobe`)에서 "스킬 입력 후 amask 모드로 화면이 덮여. 에이전트는 실제 아무런 액션도 하고 있지 않아." 소켓 `status`는 `hook_state: busy`, `skip_turn: true`(사용자가 `q`로 걷어냄), `hook_stall: 120`. 플러그인 로그에 11:27:08 `language: dismissed`.
+  * **원인 (실측, Claude Code 2.1.306)**: 플러그인의 `$.ui.ask` 질문 창은 Claude Code 안에서 `AskUserQuestion` 도구 호출로 나온다. `PreToolUse(AskUserQuestion)`과 `PermissionRequest`가 오고, 답하면 `PostToolUse`가 온다. 앞에 `UserPromptSubmit`이 없고 뒤에 `Stop`이 없다. `Notification(permission_prompt)`은 `PreToolUse` 6.4~6.6초 뒤에야 오고, 그 전에 답하거나 ESC로 닫으면 오지 않는다. 그래서 질문이 뜬 뒤 4초(`OVERLAY_DELAY`)에 덮이고, 닫힌 뒤에는 BUSY가 `hook_stall`까지 남는다. `bin/amask` + `AMASK_DEBUG`로 답함·ESC·무입력 세 경우 모두 `cover: state=busy`를 재현했다.
+  * **모델의 `AskUserQuestion`도 같다**: `UserPromptSubmit` 뒤 3.5초에 `PreToolUse(AskUserQuestion)`, 그 뒤 6.2초에 `Notification` — 그 사이 질문이 덮여 있었다(SC-003).
+  * **결정**: `hooks.TOOL_MEANING`에 도구 이름별 예외를 두고 `hooks.meaning(event, tool_name)`으로 읽는다. `PreToolUse(AskUserQuestion)` → WAITING(즉시 복귀, D-030대로 만료되지 않음), `PostToolUse(AskUserQuestion)` → None(SessionStart처럼 상태 의미 없음).
+  * **고르지 않은 것**: `UserPromptSubmit`이 연 `prompt_id`의 도구 훅만 작업으로 세는 방식. 모델 쪽 도구 훅은 그 `prompt_id`를 달고 오고 플러그인 쪽은 그렇지 않아 구분은 된다. 하지만 모델이 묻는 경우의 오작동을 고치지 못하고, `UserPromptSubmit` 없이 열리는 턴(스킬 확장, queued, 주입된 알림 등)을 하나라도 놓치면 그 턴은 아예 덮이지 않는다. `PermissionRequest`를 WAITING으로 붙이는 방식도 보류했다 — auto 모드에서 대화창 없이 승인될 때도 발화하는지 재지 않았다.
+  * **잃는 것**: 모델의 질문에 답한 뒤 모델이 도구 없이 생각·서술만 이어 가면 다음 `PreToolUse`나 `Stop`까지 덮이지 않는다. 실측에서는 답한 뒤 1.4~1.6초에 `Stop`이 왔다.
+  * **남는 구멍**: `$.ui.ask`가 아닌 방식으로 플러그인이 턴 없이 도구 훅을 일으키면 같은 증상이 다시 날 수 있다. 다른 도구 이름은 재지 않았다.
+  * 검사: `test_phase13_mod.py`(빠른 계층) 매핑 5건. `test_phase9_hooks.py`(전체 계층) — 턴 없는 플러그인 질문이 한 번도 덮지 않음, 모델 질문이 뜨면 1초 안에 깨어나고 다시 덮지 않음. 수정을 되돌린 트리에서 세 검사 모두 실패를 확인했다.

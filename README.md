@@ -150,6 +150,9 @@ When wrapping `claude`, the runner asks rather than infers. It creates one FIFO 
 hooks with `--settings`, so `bin/amask-hook` writes one line per event. `UserPromptSubmit`,
 `PreToolUse`, `PostToolUse` and `SubagentStop` read as working; `Notification` (a permission
 request, say), `Stop` and `SessionEnd` read as waiting and hand the screen back at once.
+The exception is `AskUserQuestion`: a question to you, whether the model's or a plugin's
+`$.ui.ask`, is a tool call to Claude Code, so its `PreToolUse` reads as waiting and its
+`PostToolUse` as nothing (D-062).
 `--settings` loads *in addition to* your own settings, so `~/.claude/settings.json` is
 neither read nor written, and the wiring lives only for that one process.
 

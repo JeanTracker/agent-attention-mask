@@ -149,6 +149,21 @@ check("the mod ships beside the package",
 # -- emitter to runner -------------------------------------------------------
 
 check("TurnAborted means waiting", hooks.EVENT_MEANING.get("TurnAborted") == hooks.WAITING)
+
+# A plugin's `$.ui.ask` and the model's own question are one tool to Claude
+# Code (measured 2.1.306), and a question is the opposite of work (D-062).
+check("asking the user is waiting",
+      hooks.meaning("PreToolUse", "AskUserQuestion") == hooks.WAITING)
+check("the answer says nothing -- no Stop follows a plugin's question",
+      hooks.meaning("PostToolUse", "AskUserQuestion") is None)
+check("other tools are still work",
+      hooks.meaning("PreToolUse", "Bash") == hooks.BUSY
+      and hooks.meaning("PostToolUse", "Bash") == hooks.BUSY
+      and hooks.meaning("PreToolUse") == hooks.BUSY)
+check("the tool name only matters to tool events",
+      hooks.meaning("Stop", "AskUserQuestion") == hooks.WAITING
+      and hooks.meaning("UserPromptSubmit", "AskUserQuestion") == hooks.BUSY)
+check("unknown events still mean nothing", hooks.meaning("Nope") is None)
 fragment = HookChannel(EMITTER, path="/tmp/unused").settings()["hooks"]
 check("and is no Claude Code hook", "TurnAborted" not in fragment, sorted(fragment))
 
