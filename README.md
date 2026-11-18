@@ -11,18 +11,8 @@ amask claude -p "refactor this"
 amask codex exec "make the tests pass"
 ```
 
-```
-  > Use the Bash tool to run 'sleep 12; echo done', then
-    summarise in 2 paragraphs
+<img src="assets/panel.png" width="684" alt="The screen covered by matrix rain, with the status panel in the centre: the prompt, working for 13s, model Opus 5.5, the folder, 4.5KB of output buffered, and 'press any key to return / q to skip this turn'.">
 
-  working...                                            8s
-  MODEL     Opus 5 (1M context)
-  DIR       ~/edu/amask
-  BUFFERED  5.1KB (831 tokens)
-
-                             press any key to return
-                                 q to skip this turn
-```
 
 - **Transparent.** The agent runs on a virtual PTY and believes it is on a real terminal.
   Colour, interactive input and the exit code pass through unchanged.
@@ -218,15 +208,8 @@ Narrowest wins: the shipped default, then this file, then an env knob, then a se
 Each runner opens a Unix socket, so something other than the terminal it runs in can see what
 it is doing. `amask --top` is the view onto it, refreshed twice a second:
 
-```
- amask  3 sessions  (2 marked)
-   PID    Screen   State          Cover  Folder                Prompt
-*  23875  covered  working        4s     amask                 add the config feature
-   24110  open     waiting·skip   20s    release-notes         draft the release notes
-*  24777  covered  working·idle?  8s     agent-attention-mask  run the whole suite
-defaults overlay_delay=8 -> applied to 2 sessions
-mark(space)  all(a)  open(enter) │ skip(s)  wake(w) │ defaults(d)  config(c) │ poll(r)  help(?)  quit(q)
-```
+<img src="assets/top-list.png" width="820" alt="amask --top listing three sessions, two of them marked: one covered and working, one open and waiting with its turn skipped, one covered and working but gone quiet (idle?), with the key bar along the bottom.">
+
 
 The bar along the bottom reads `what it does(key)`, grouped by what the keys are for, and it
 is laid out for the window it is in: a wide terminal gets `skip turn(s)` and `push
@@ -247,47 +230,14 @@ screen -- session id, working directory, how long it has
 been working, how much output is hidden, all three timing values and the prompt in full. The
 same commands work there and apply only to the session you are looking at.
 
-```
- amask  session 23875  [covered]
+<img src="assets/top-detail.png" width="756" alt="One session on its own screen in amask --top: PID, command, session id, folder, start time, screen and state, how long it has been working, model, 12K of hidden output, the three timing values and the prompt.">
 
-  PID           23875
-  Command       claude --resume
-  Session id    sess-abc
-  Folder        /home/me/work
-  Started       2026-09-22 10:54:29 (3m ago)
-
-  Screen        covered (the rain is up)
-  State         working
-  Working       54.2s
-  Notes         hooks say working, but the output stopped
-  Model         Opus 5
-  Hidden        43K (43869B, all of it comes back when the cover lifts)
-
-  Cover delay   4s
-  Idle silence  1.5s
-  Hook stall    120s
-
-  Prompt        add the config feature
-scroll(↑↓)  back(esc) │ skip(s)  wake(w) │ defaults(d)  config(c) │ poll(r)  help(?)  quit(q)
-```
 
 `c` opens the stored defaults -- the same file `amask --config` writes, edited from the screen
 that shows what those numbers are doing:
 
-```
- amask  default settings  (unsaved)
+<img src="assets/top-config.png" width="660" alt="The stored-defaults editor in amask --top: idle_silence 1.5s and hook_stall 120s at their shipped values, overlay_delay changed to 9s against a shipped 4s, unsaved.">
 
-  The defaults a NEW session starts with. This writes the file only --
-  running sessions keep their own values, and `d` in the list pushes
-  these into the marked ones. File: ~/.amask/config.json
-
-   idle_silence  1.5s      shipped  shipped 1.5s  step 0.1
-   hook_stall    120s      shipped  shipped 120s  step 10
- > overlay_delay 9s        changed  shipped 4s    step 1
-
-  Unsaved. Enter writes it, esc leaves it alone.
-field(↑↓)  change(+/-)  shipped(0) │ save(enter)  back(esc) │ help(?)  quit(q)
-```
 
 `↑`/`↓` pick a value, `+`/`-` move it, `0` forgets it again (the shipped default comes back),
 `enter` writes the file and `esc` leaves without writing. Nothing else writes it, and what it
