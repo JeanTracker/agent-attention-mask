@@ -127,6 +127,10 @@ INJECTED_PROMPT_PREFIXES = (
     "<task-notification>",
     "<system-reminder>",
     "<local-command-",
+    # Another Claude session's message, when it lands on an idle agent: it
+    # opens a turn of its own as "<cross-session-message from=...>". One that
+    # lands mid-turn comes wrapped in <system-reminder> instead (D-063).
+    "<cross-session-message",
 )
 
 # How long the agent must be *continuously* busy before the screen is covered.

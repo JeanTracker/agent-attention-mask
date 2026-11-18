@@ -164,6 +164,19 @@ check("the tool name only matters to tool events",
       hooks.meaning("Stop", "AskUserQuestion") == hooks.WAITING
       and hooks.meaning("UserPromptSubmit", "AskUserQuestion") == hooks.BUSY)
 check("unknown events still mean nothing", hooks.meaning("Nope") is None)
+
+# Prompts the harness raised rather than the user typed stay off the panel
+# (D-031). Another session's message on an idle agent is one (D-063).
+check("a cross-session message is not the user's prompt",
+      cli._is_injected_prompt(
+          '<cross-session-message from="uds:/tmp/cc-socks/29132.sock" '
+          'from-name="nunchi-16" from-mode="prompting">\n요구 이력 78은'))
+check("the existing kinds still are",
+      all(cli._is_injected_prompt(p) for p in
+          ("<task-notification>\n<task-id>x", "<system-reminder>", "<local-command-stdout>")))
+check("what the user typed is not",
+      not cli._is_injected_prompt("cross-session-message 가 뭐야?")
+      and not cli._is_injected_prompt("오늘 날씨 알려줘"))
 fragment = HookChannel(EMITTER, path="/tmp/unused").settings()["hooks"]
 check("and is no Claude Code hook", "TurnAborted" not in fragment, sorted(fragment))
 
