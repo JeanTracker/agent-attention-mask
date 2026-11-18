@@ -373,3 +373,6 @@
 - **패널 프롬프트에 다른 세션의 메시지 원문 (2026-11-18, D-063)**: 사용자 신고. 덮여 있던 pid 70618의 `status.prompt`가 `<cross-session-message from=…>`였다. 쉬는 에이전트에 도착한 세션 간 메시지가 `UserPromptSubmit`으로 오는데, D-031의 접두어 목록에 이 태그가 없었다. `INJECTED_PROMPT_PREFIXES`에 추가했다.
   - 검증: `test_phase13_mod.py`에 3건을 추가했고 수정 전 트리에서 실패를 확인했다. `test_phase9_hooks.py` 단독 통과. `python3 tests/run_fast.py`는 phase15 설치 7건만 실패한다(로컬 macOS, 2026-11-18). 2026-11-17에 기록한 Homebrew python 3.14 환경 문제와 같은 것이다. `run_all.py`는 이번에 돌리지 않았다.
   - 이어서: `python3 tests/run_all.py`는 **14개 스위트 중 13개 통과**(PASS 891, 로컬 macOS, 2026-11-18)다. 실패한 1개는 phase15 설치 7건이고, 위와 같은 환경 문제다.
+  - CI: `198dcd0`의 master 푸시 run `44236136923`에서 4잡이 전부 성공했다(전체 스위트 ubuntu·macOS, 빠른 계층 ubuntu·macOS). phase15는 CI 양쪽 OS에서 통과하므로 로컬 환경 문제다.
+- **phase15를 로컬 Homebrew python 3.14에서 고침 (2026-11-18)**: 테스트는 `dirname(sys.executable)`을 PATH 앞에 두는데, Homebrew `python@3.14`는 그 디렉터리에 `python3.14`만 두고 `python3`를 두지 않는다. 그래서 `install.sh`와 `bin/amask`(`#!/usr/bin/env python3`)가 `/usr/bin/python3`(3.9.6)를 잡았고, 7건이 `python3 is older than 3.11`로 실패했다. 테스트가 작업 디렉터리에 `python3 -> sys.executable` 링크를 만들어 그 디렉터리를 PATH 맨 앞에 둔다. 제품 코드 변경 없음.
+  - 검증: phase15 단독 실행이 Homebrew `bin/python3.14`와 `libexec/bin/python3` 두 경로에서 모두 통과했다. `python3 tests/run_fast.py` 전부 통과. `python3 tests/run_all.py` **14개 스위트 전부 통과, 종료코드 0**(PASS 923, 로컬 macOS, 2026-11-18).

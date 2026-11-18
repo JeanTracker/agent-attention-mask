@@ -86,7 +86,14 @@ try:
     }
     if shutil.which("git"):
         env["PATH"] += ":" + os.path.dirname(shutil.which("git"))
-    env["PATH"] = os.path.dirname(sys.executable) + ":" + env["PATH"]
+    # install.sh and bin/amask both ask for `python3`, and it must be the one
+    # running this suite, not /usr/bin's (3.9 on macOS). Its own directory is
+    # not enough: Homebrew's python@3.14 keeps only `python3.14` beside
+    # sys.executable, so `python3` fell through to the system one.
+    interpreter = os.path.join(work, "python")
+    os.makedirs(interpreter)
+    os.symlink(sys.executable, os.path.join(interpreter, "python3"))
+    env["PATH"] = interpreter + ":" + env["PATH"]
 
     def install(*args, stdin_script=False):
         if stdin_script:
