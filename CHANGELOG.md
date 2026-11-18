@@ -9,6 +9,24 @@ The reasoning behind each judgement is recorded as a numbered entry in
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-18
+
+### Fixed
+
+- **A question no longer goes under the rain.** A plugin's `$.ui.ask` and the model's own
+  `AskUserQuestion` reach the hooks as a tool call, so the runner read them as work: it
+  covered the question four seconds in and, after a plugin's question was answered or
+  dismissed, stayed covered until the hook stall ran out. Asking now reads as waiting
+  (D-062).
+- **Another session's message no longer shows as your prompt.** A message from another
+  Claude session that lands on an idle agent opens a turn of its own, and the panel showed
+  its `<cross-session-message ...>` markup as the question. It is now kept off the panel
+  like the harness's other injected prompts (D-063).
+- **MODEL shows the session's real model.** It was scraped off the screen, so an Opus
+  session could read `Sonnet 5.5` or `Gemini 2.5` from names that merely appeared in a
+  reply. The panel now takes the exact model from the `SessionStart` hook and only scrapes
+  when no hook says. A `/model` switch mid-session is not followed yet (D-060, D-061).
+
 ## [0.2.0] - 2026-10-16
 
 ### Added
@@ -96,6 +114,7 @@ nine phase suites pass on Linux and macOS.
 - **CI.** The phase suites run on Linux and macOS against Python 3.11, 3.12 and 3.13.
 - **Licence.** MIT.
 
-[Unreleased]: https://github.com/JeanTracker/agent-attention-mask/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/JeanTracker/agent-attention-mask/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/JeanTracker/agent-attention-mask/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/JeanTracker/agent-attention-mask/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JeanTracker/agent-attention-mask/releases/tag/v0.1.0

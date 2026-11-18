@@ -376,3 +376,4 @@
   - CI: `198dcd0`의 master 푸시 run `44236136923`에서 4잡이 전부 성공했다(전체 스위트 ubuntu·macOS, 빠른 계층 ubuntu·macOS). phase15는 CI 양쪽 OS에서 통과하므로 로컬 환경 문제다.
 - **phase15를 로컬 Homebrew python 3.14에서 고침 (2026-11-18)**: 테스트는 `dirname(sys.executable)`을 PATH 앞에 두는데, Homebrew `python@3.14`는 그 디렉터리에 `python3.14`만 두고 `python3`를 두지 않는다. 그래서 `install.sh`와 `bin/amask`(`#!/usr/bin/env python3`)가 `/usr/bin/python3`(3.9.6)를 잡았고, 7건이 `python3 is older than 3.11`로 실패했다. 테스트가 작업 디렉터리에 `python3 -> sys.executable` 링크를 만들어 그 디렉터리를 PATH 맨 앞에 둔다. 제품 코드 변경 없음.
   - 검증: phase15 단독 실행이 Homebrew `bin/python3.14`와 `libexec/bin/python3` 두 경로에서 모두 통과했다. `python3 tests/run_fast.py` 전부 통과. `python3 tests/run_all.py` **14개 스위트 전부 통과, 종료코드 0**(PASS 923, 로컬 macOS, 2026-11-18).
+- **릴리스 0.2.1 (2026-11-18)**: 0.2.0 이후의 수정 D-060~D-063을 패치 버전으로 묶었다. 새 기능은 없다. `CHANGELOG.md`, `amask/__init__.py`, 태그 `v0.2.1`. 검증은 바로 위 항목의 `run_all.py` 14개 스위트 전부 통과(PASS 923)이고, 그 뒤 바뀐 것은 버전 문자열과 변경 기록뿐이다.
